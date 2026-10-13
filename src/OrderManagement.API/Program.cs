@@ -1,8 +1,12 @@
+using Microsoft.EntityFrameworkCore;
+using OrderManagement.API.Data;
 using OrderManagement.API.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // --- Service registration (DbContext, application services, validators: later tasks) ---
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();
 

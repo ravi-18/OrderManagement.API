@@ -104,7 +104,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 ### Phase 3 — Reusable Cross-Cutting
 
 - [x] Task 9: Add `Result` / `Error` types and domain exceptions (not found, conflict, validation, business).
-- [ ] Task 10: Global exception / result → `ProblemDetails` mapping (400/404/409/422).
+- [x] Task 10: Global exception / result → `ProblemDetails` mapping (400/404/409/422).
 - [ ] Task 11: `IIdempotencyService` + store using unique constraint (Skenario C foundation).
 
 **Verification:** Unit tests for Result mapping / status helper if present; build passes.
@@ -217,6 +217,14 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Verification:** `dotnet build` succeeded; `dotnet ef migrations add InitialCreate`; SQL reviewed (`xmin` not added as a user column; `IdempotencyRecords` PK=`Key`; 3 seed products including stock 15). `dotnet ef database update` failed: `28P01 password authentication failed for user "postgres"`.
 - **Commit:** `feat: add initial migration with concurrency and seed products`
 - **Notes:** Concurrency API: `builder.Property(o => o.RowVersion).IsRowVersion()` (Npgsql 10 maps `uint` rowversion → PostgreSQL `xmin`/`xid`). `UseXminAsConcurrencyToken()` is obsolete/removed. Apply locally: set a real password (or `ConnectionStrings__DefaultConnection`), then `dotnet ef database update --project src/OrderManagement.API/OrderManagement.API.csproj`. Do not use `EnsureCreated` or drop the database.
+
+### Task 10 — ProblemDetails error mapping pipeline
+
+- **Status:** `[x]` Completed
+- **Files changed:** `Common/ProblemDetailsMapper.cs`, `Common/ResultHttpResultExtensions.cs`, `Middleware/DomainExceptionHandler.cs`, `Middleware/CorrelationIdMiddleware.cs`, `Program.cs`, mapper + pipeline tests, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet build`; `dotnet test` — 28 passed (13 mapper/Result→Problem, 6 IExceptionHandler pipeline including 500 leak-safety + correlation on errors)
+- **Commit:** `feat: add ProblemDetails error mapping pipeline`
+- **Notes:** `IExceptionHandler` maps domain exceptions to 400/404/409/422 and unhandled to 500 without stack/secrets. Correlation header is applied in `OnStarting` so it survives `ExceptionHandlerMiddleware` clearing the response. Domain `ValidationException` aliased vs BCL.
 
 ---
 

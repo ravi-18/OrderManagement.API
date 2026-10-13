@@ -19,7 +19,13 @@ public sealed class CorrelationIdMiddleware
         var correlationId = ResolveCorrelationId(context.Request);
         context.TraceIdentifier = correlationId;
         context.Items[HeaderName] = correlationId;
-        context.Response.Headers[HeaderName] = correlationId;
+
+        // Set on start so the header survives ExceptionHandlerMiddleware.Clear().
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers[HeaderName] = correlationId;
+            return Task.CompletedTask;
+        });
 
         using (_logger.BeginScope(new Dictionary<string, object> { [LogScopeKey] = correlationId }))
         {

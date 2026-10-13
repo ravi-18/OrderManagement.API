@@ -9,11 +9,14 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();
+builder.Services.AddExceptionHandler<DomainExceptionHandler>();
+builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
 // --- HTTP pipeline ---
 app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {

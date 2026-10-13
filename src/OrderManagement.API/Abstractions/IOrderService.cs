@@ -7,4 +7,8 @@ namespace OrderManagement.API.Abstractions;
 public interface IOrderService
 {
     Task<Result<OrderResponse>> CreateAsync(string idempotencyKey, CreateOrderRequest request, CancellationToken ct);
+
+    Task<Result<OrderResponse>> GetByIdAsync(Guid id, CancellationToken ct);
+
+    Task<Result<PagedResponse<OrderResponse>>> ListAsync(ListOrdersQuery query, CancellationToken ct);
 }

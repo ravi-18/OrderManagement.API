@@ -140,6 +140,108 @@ public sealed class OrdersControllerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Get_ExistingOrder_Returns200WithItems()
+    {
+        var order = SampleOrder();
+        _orders.GetNext = Result.Success(order);
+
+        var response = await _client.GetAsync($"/api/orders/{order.Id}");
+        var body = await response.Content.ReadFromJsonAsync<OrderResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(order.Id, _orders.LastGetId);
+        Assert.Equal(order.Id, body!.Id);
+        Assert.Equal(order.Items[0].ProductId, Assert.Single(body.Items).ProductId);
+        Assert.Equal(order.Items[0].Quantity, body.Items[0].Quantity);
+        Assert.Equal(order.Items[0].UnitPrice, body.Items[0].UnitPrice);
+    }
+
+    [Fact]
+    public async Task Get_MissingOrder_Returns404ProblemDetails()
+    {
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000099");
+        _orders.GetNext = Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."));
+
+        var response = await _client.GetAsync($"/api/orders/{id}");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(404, json.GetProperty("status").GetInt32());
+        Assert.Equal("not_found", json.GetProperty("code").GetString());
+        Assert.Equal(id, _orders.LastGetId);
+    }
+
+    [Fact]
+    public async Task List_ForwardsFiltersAndReturnsPagedBody()
+    {
+        var customerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001");
+        var from = DateTimeOffset.Parse("2026-01-01T00:00:00Z");
+        var to = DateTimeOffset.Parse("2026-12-31T23:59:59Z");
+        var order = SampleOrder();
+        _orders.ListNext = Result.Success(new PagedResponse<OrderResponse>
+        {
+            Items = [order],
+            Page = 2,
+            PageSize = 10,
+            TotalCount = 21
+        });
+
+        var response = await _client.GetAsync(
+            $"/api/orders?status=Pending&customerId={customerId}&from={Uri.EscapeDataString(from.ToString("O"))}&to={Uri.EscapeDataString(to.ToString("O"))}&page=2&pageSize=10");
+        var body = await response.Content.ReadFromJsonAsync<PagedResponse<OrderResponse>>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(_orders.LastListQuery);
+        Assert.Equal(OrderStatus.Pending, _orders.LastListQuery!.Status);
+        Assert.Equal(customerId, _orders.LastListQuery.CustomerId);
+        Assert.Equal(from, _orders.LastListQuery.From);
+        Assert.Equal(to, _orders.LastListQuery.To);
+        Assert.Equal(2, _orders.LastListQuery.Page);
+        Assert.Equal(10, _orders.LastListQuery.PageSize);
+        Assert.Equal(order.Id, Assert.Single(body!.Items).Id);
+        Assert.Equal(2, body.Page);
+        Assert.Equal(10, body.PageSize);
+        Assert.Equal(21, body.TotalCount);
+    }
+
+    [Fact]
+    public async Task List_OmitsQuery_UsesDefaultPageAndPageSize()
+    {
+        _orders.ListNext = Result.Success(new PagedResponse<OrderResponse>
+        {
+            Items = [],
+            Page = 1,
+            PageSize = 20,
+            TotalCount = 0
+        });
+
+        var response = await _client.GetAsync("/api/orders");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, _orders.LastListQuery!.Page);
+        Assert.Equal(20, _orders.LastListQuery.PageSize);
+        Assert.Null(_orders.LastListQuery.Status);
+        Assert.Null(_orders.LastListQuery.CustomerId);
+        Assert.Null(_orders.LastListQuery.From);
+        Assert.Null(_orders.LastListQuery.To);
+    }
+
+    [Fact]
+    public async Task List_InvalidPage_Returns400ProblemDetails()
+    {
+        _orders.ListNext = Result.Failure<PagedResponse<OrderResponse>>(
+            Error.Validation("page must be at least 1."));
+
+        var response = await _client.GetAsync("/api/orders?page=0");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("validation", json.GetProperty("code").GetString());
+        Assert.Equal(0, _orders.LastListQuery!.Page);
+    }
+
+    [Fact]
     public async Task Post_Success_Returns201WithOrderBody()
     {
         var order = new OrderResponse
@@ -178,15 +280,42 @@ public sealed class OrdersControllerTests : IAsyncLifetime
         Items = [new CreateOrderItemRequest { ProductId = ProductSeed.ScenarioAProductId, Quantity = 2 }]
     };
 
+    private static OrderResponse SampleOrder() => new()
+    {
+        Id = Guid.Parse("cccccccc-0001-4000-8000-000000000001"),
+        CustomerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"),
+        ShippingAddress = "Jl. Sudirman 1",
+        Status = nameof(OrderStatus.Pending),
+        CreatedAt = DateTimeOffset.Parse("2026-10-13T00:00:00Z"),
+        UpdatedAt = DateTimeOffset.Parse("2026-10-13T00:00:00Z"),
+        Items = [new OrderItemResponse { ProductId = ProductSeed.ScenarioAProductId, Quantity = 2, UnitPrice = 10.00m }]
+    };
+
     private sealed class ConfigurableOrderService : IOrderService
     {
         public Result<OrderResponse>? Next { get; set; }
+        public Result<OrderResponse>? GetNext { get; set; }
+        public Result<PagedResponse<OrderResponse>>? ListNext { get; set; }
         public string? LastKey { get; private set; }
+        public Guid? LastGetId { get; private set; }
+        public ListOrdersQuery? LastListQuery { get; private set; }
 
         public Task<Result<OrderResponse>> CreateAsync(string idempotencyKey, CreateOrderRequest request, CancellationToken ct)
         {
             LastKey = idempotencyKey;
             return Task.FromResult(Next ?? throw new InvalidOperationException("Next result was not configured."));
+        }
+
+        public Task<Result<OrderResponse>> GetByIdAsync(Guid id, CancellationToken ct)
+        {
+            LastGetId = id;
+            return Task.FromResult(GetNext ?? throw new InvalidOperationException("GetNext result was not configured."));
+        }
+
+        public Task<Result<PagedResponse<OrderResponse>>> ListAsync(ListOrdersQuery query, CancellationToken ct)
+        {
+            LastListQuery = query;
+            return Task.FromResult(ListNext ?? throw new InvalidOperationException("ListNext result was not configured."));
         }
     }
 }

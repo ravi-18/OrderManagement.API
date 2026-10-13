@@ -117,7 +117,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 - [ ] Task 12: Domain status transition rules (valid/invalid matrix from FRD); unit tests.
 - [x] Task 13: Create Order — DTOs, validator, service (transaction + atomic stock deduct + idempotency), `POST /api/orders`.
-- [ ] Task 14: Get Order + List Orders (filters + pagination), read-only `AsNoTracking` where appropriate.
+- [x] Task 14: Get Order + List Orders (filters + pagination), read-only `AsNoTracking` where appropriate.
 - [ ] Task 15: Update Order Status — optimistic concurrency; invalid transition → 409/422 as designed; Skenario B.
 - [ ] Task 16: Cancel Order — Pending/Confirmed only; restore stock atomically; terminal rejection.
 
@@ -242,6 +242,14 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Commit:** `feat: add create order with atomic stock`
 - **Follow-up commit:** `fix: harden create-order rollback and idempotency abandon`
 - **Notes:** Missing `Idempotency-Key` → 400 (also length > 256). ShippingAddress max 500 → 400. Hash mismatch → 422 (`business_rule`). In-flight → **409** (retryable). Insufficient stock → 409. Replay of stored **201** returns cached body; non-201 stored status maps to a failure Result (honors stored status). Failed create: rollback with `CancellationToken.None`, `ChangeTracker.Clear()`, then `IIdempotencyService.AbandonAsync` with `None` so an Added Order cannot persist without stock deduct. Atomic SQL + Scenario A concurrency need real PostgreSQL (Task 17).
+
+### Task 14 — Get Order + List Orders
+
+- **Status:** `[x]` Completed
+- **Files changed:** `Controllers/OrdersController.cs`, `Services/OrderService.cs`, `Abstractions/IOrderService.cs`, `Contracts/Requests/ListOrdersQuery.cs`, `Contracts/Responses/PagedResponse.cs`, get/list controller + service tests, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet test` — 111 passed (GET 200/404; list filters + pagination + `AsNoTracking`; page/pageSize validation)
+- **Commit:** `feat: add get and list orders`
+- **Notes:** `GET /api/orders/{id}` returns `OrderResponse` with items (404 if missing). `GET /api/orders` filters `status`, `customerId`, `from`/`to` (inclusive `CreatedAt`), `page` default 1, `pageSize` default 20 max 100 (invalid → 400). Paged body `{ items, page, pageSize, totalCount }`. Reads use `AsNoTracking`; DTOs only. List ordered by `CreatedAt` desc, then `Id`. Status/cancel not in this task.
 
 ---
 

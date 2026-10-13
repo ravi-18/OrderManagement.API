@@ -208,6 +208,119 @@ public sealed class OrderServiceTests
     }
 
     [Fact]
+    public async Task GetByIdAsync_Missing_IsNotFound()
+    {
+        await using var db = CreateDb();
+        var sut = CreateSut(db);
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000099");
+
+        var result = await sut.GetByIdAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("not_found", result.Error!.Code);
+        Assert.Contains(id.ToString(), result.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_Existing_ReturnsDtoWithItemsAndDoesNotTrack()
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        var customerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001");
+        SeedOrder(db, id, customerId, OrderStatus.Pending, DateTimeOffset.Parse("2026-03-01T00:00:00Z"), quantity: 2);
+        db.ChangeTracker.Clear();
+        var sut = CreateSut(db);
+
+        var result = await sut.GetByIdAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(id, result.Value.Id);
+        Assert.Equal(customerId, result.Value.CustomerId);
+        Assert.Equal(nameof(OrderStatus.Pending), result.Value.Status);
+        Assert.Equal("Jl. Test", result.Value.ShippingAddress);
+        var item = Assert.Single(result.Value.Items);
+        Assert.Equal(ProductSeed.ScenarioAProductId, item.ProductId);
+        Assert.Equal(2, item.Quantity);
+        Assert.Equal(10.00m, item.UnitPrice);
+        Assert.Empty(db.ChangeTracker.Entries());
+    }
+
+    [Fact]
+    public async Task ListAsync_FiltersStatusCustomerAndCreatedAtRange()
+    {
+        await using var db = CreateDb();
+        var customerA = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001");
+        var customerB = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000002");
+        var matchId = Guid.Parse("cccccccc-0001-4000-8000-000000000010");
+        SeedOrder(db, matchId, customerA, OrderStatus.Pending, DateTimeOffset.Parse("2026-06-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000011"), customerA, OrderStatus.Confirmed, DateTimeOffset.Parse("2026-06-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000012"), customerB, OrderStatus.Pending, DateTimeOffset.Parse("2026-06-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000013"), customerA, OrderStatus.Pending, DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000014"), customerA, OrderStatus.Pending, DateTimeOffset.Parse("2026-12-01T00:00:00Z"));
+        db.ChangeTracker.Clear();
+        var sut = CreateSut(db);
+
+        var result = await sut.ListAsync(new ListOrdersQuery
+        {
+            Status = OrderStatus.Pending,
+            CustomerId = customerA,
+            From = DateTimeOffset.Parse("2026-03-01T00:00:00Z"),
+            To = DateTimeOffset.Parse("2026-09-01T00:00:00Z"),
+            Page = 1,
+            PageSize = 20
+        }, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(matchId, Assert.Single(result.Value.Items).Id);
+        Assert.Equal(1, result.Value.TotalCount);
+        Assert.Equal(1, result.Value.Page);
+        Assert.Equal(20, result.Value.PageSize);
+        Assert.Empty(db.ChangeTracker.Entries());
+    }
+
+    [Fact]
+    public async Task ListAsync_PaginatesNewestFirst()
+    {
+        await using var db = CreateDb();
+        var customerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001");
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000021"), customerId, OrderStatus.Pending, DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000022"), customerId, OrderStatus.Pending, DateTimeOffset.Parse("2026-02-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000023"), customerId, OrderStatus.Pending, DateTimeOffset.Parse("2026-03-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000024"), customerId, OrderStatus.Pending, DateTimeOffset.Parse("2026-04-01T00:00:00Z"));
+        SeedOrder(db, Guid.Parse("cccccccc-0001-4000-8000-000000000025"), customerId, OrderStatus.Pending, DateTimeOffset.Parse("2026-05-01T00:00:00Z"));
+        var sut = CreateSut(db);
+
+        var result = await sut.ListAsync(new ListOrdersQuery { Page = 2, PageSize = 2 }, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(5, result.Value.TotalCount);
+        Assert.Equal(2, result.Value.Page);
+        Assert.Equal(2, result.Value.PageSize);
+        Assert.Equal(
+            [Guid.Parse("cccccccc-0001-4000-8000-000000000023"), Guid.Parse("cccccccc-0001-4000-8000-000000000022")],
+            result.Value.Items.Select(i => i.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task ListAsync_InvalidPageOrPageSize_IsValidation()
+    {
+        await using var db = CreateDb();
+        var sut = CreateSut(db);
+
+        var page = await sut.ListAsync(new ListOrdersQuery { Page = 0, PageSize = 20 }, CancellationToken.None);
+        var size = await sut.ListAsync(new ListOrdersQuery { Page = 1, PageSize = 0 }, CancellationToken.None);
+        var max = await sut.ListAsync(new ListOrdersQuery { Page = 1, PageSize = 101 }, CancellationToken.None);
+
+        Assert.True(page.IsFailure);
+        Assert.Equal("validation", page.Error!.Code);
+        Assert.True(size.IsFailure);
+        Assert.Equal("validation", size.Error!.Code);
+        Assert.True(max.IsFailure);
+        Assert.Equal("validation", max.Error!.Code);
+        Assert.Empty(db.Orders);
+    }
+
+    [Fact]
     public async Task CreateAsync_Success_PersistsPendingOrderCapturesPriceAndCompletes()
     {
         await using var db = CreateDb();
@@ -232,8 +345,42 @@ public sealed class OrderServiceTests
         Assert.Contains(result.Value.Id.ToString(), idempotency.LastCompletedBody, StringComparison.Ordinal);
     }
 
+    private static OrderService CreateSut(AppDbContext db) =>
+        CreateSut(db, new FakeIdempotencyService(), new FakeStockService());
+
     private static OrderService CreateSut(AppDbContext db, IIdempotencyService idempotency, IStockService stock) =>
         new(db, idempotency, stock, new CreateOrderRequestValidator());
+
+    private static void SeedOrder(
+        AppDbContext db,
+        Guid id,
+        Guid customerId,
+        OrderStatus status,
+        DateTimeOffset createdAt,
+        int quantity = 1)
+    {
+        db.Orders.Add(new Order
+        {
+            Id = id,
+            CustomerId = customerId,
+            ShippingAddress = "Jl. Test",
+            Status = status,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            Items =
+            [
+                new OrderItem
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = id,
+                    ProductId = ProductSeed.ScenarioAProductId,
+                    Quantity = quantity,
+                    UnitPrice = 10.00m
+                }
+            ]
+        });
+        db.SaveChanges();
+    }
 
     private static AppDbContext CreateDb()
     {

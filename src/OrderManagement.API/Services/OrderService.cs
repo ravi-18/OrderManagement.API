@@ -61,6 +61,74 @@ public sealed class OrderService(
         }
     }
 
+    public async Task<Result<OrderResponse>> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        var order = await db.Orders
+            .AsNoTracking()
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == id, ct);
+
+        return order is null
+            ? Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."))
+            : Result.Success(ToResponse(order));
+    }
+
+    public async Task<Result<PagedResponse<OrderResponse>>> ListAsync(ListOrdersQuery query, CancellationToken ct)
+    {
+        if (query.Page < 1)
+        {
+            return Result.Failure<PagedResponse<OrderResponse>>(Error.Validation("page must be at least 1."));
+        }
+
+        if (query.PageSize < 1)
+        {
+            return Result.Failure<PagedResponse<OrderResponse>>(Error.Validation("pageSize must be at least 1."));
+        }
+
+        if (query.PageSize > 100)
+        {
+            return Result.Failure<PagedResponse<OrderResponse>>(Error.Validation("pageSize must be 100 or fewer."));
+        }
+
+        var filtered = db.Orders.AsNoTracking();
+        if (query.Status is { } status)
+        {
+            filtered = filtered.Where(o => o.Status == status);
+        }
+
+        if (query.CustomerId is { } customerId)
+        {
+            filtered = filtered.Where(o => o.CustomerId == customerId);
+        }
+
+        if (query.From is { } from)
+        {
+            filtered = filtered.Where(o => o.CreatedAt >= from);
+        }
+
+        if (query.To is { } to)
+        {
+            filtered = filtered.Where(o => o.CreatedAt <= to);
+        }
+
+        var totalCount = await filtered.CountAsync(ct);
+        var orders = await filtered
+            .Include(o => o.Items)
+            .OrderByDescending(o => o.CreatedAt)
+            .ThenBy(o => o.Id)
+            .Skip((query.Page - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .ToListAsync(ct);
+
+        return Result.Success(new PagedResponse<OrderResponse>
+        {
+            Items = orders.Select(ToResponse).ToList(),
+            Page = query.Page,
+            PageSize = query.PageSize,
+            TotalCount = totalCount
+        });
+    }
+
     private async Task<Result<OrderResponse>> CreateNewOrderAsync(
         string idempotencyKey,
         CreateOrderRequest request,

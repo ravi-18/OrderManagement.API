@@ -77,11 +77,11 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 ### Phase 1 — Project Foundation
 
-- [ ] Task 1: Create solution + Web API project (`net10.0`) + test project skeleton.
-- [ ] Task 2: Add `.gitignore`, basic `README` stub, connection string placeholder (no secrets).
-- [ ] Task 3: Configure DI baseline, nullable, implicit usings, OpenAPI.
+- [x] Task 1: Create solution + Web API project (`net10.0`) + test project skeleton.
+- [x] Task 2: Add `.gitignore`, basic `README` stub, connection string placeholder (no secrets).
+- [x] Task 3: Configure DI baseline, nullable, implicit usings, OpenAPI.
 - [x] Task 4: Add health check + correlation ID middleware (`X-Correlation-Id`).
-- [ ] Task 5: Verify `dotnet build` and app starts locally.
+- [x] Task 5: Verify `dotnet build` and app starts locally.
 
 **Verification:** `dotnet build`; run API; `GET /health` (or map equivalent) returns success; correlation ID appears on responses/logs.
 
@@ -156,6 +156,28 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 ## Progress Log
 
+### Task 1 — Solution + Web API + test skeleton
+
+- **Status:** `[x]` Completed
+- **Files changed:** `OrderManagement.sln`, `src/OrderManagement.API/` (project, `Program.cs`, appsettings, launchSettings), `tests/OrderManagement.API.Tests/`
+- **Verification:** `dotnet build` on solution
+- **Commit:** `fd4c120` — `chore: initialize .NET API solution`
+- **Notes:** Preceded on branch by `f406d18` (ignore `.superpowers/sdd/` scratch). Targets `net10.0`.
+
+### Task 2 — README, gitignore, connection placeholder
+
+- **Status:** `[x]` Completed
+- **Files changed:** `.gitignore`, `README.md`, `appsettings.Development.json` (placeholder connection string, no secrets)
+- **Verification:** Manual review; build still passes
+- **Commit:** `d1ff271` — `docs: add README stub and connection string placeholder`
+
+### Task 3 — DI baseline and layered scaffold
+
+- **Status:** `[x]` Completed
+- **Files changed:** Layer folders under `src/OrderManagement.API/` (`Controllers`, `Services`, `Data`, etc.), `Program.cs` (OpenAPI/DI baseline)
+- **Verification:** `dotnet build`
+- **Commit:** `09c7191` — `chore: configure DI baseline and layered folder scaffold`
+
 ### Task 0 — Align plan with FRD
 
 - **Status:** `[x]` Completed
@@ -169,8 +191,16 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Status:** `[x]` Completed
 - **Files changed:** `Program.cs`, `Middleware/CorrelationIdMiddleware.cs`, health/correlation WebApplicationFactory tests, `docs/IMPLEMENTATION_PLAN.md`
 - **Verification:** `dotnet build`; `dotnet test` filter `HealthAndCorrelationIdTests` — 3 passed (GET `/health` 200; generated `X-Correlation-Id`; client-supplied ID preserved)
-- **Commit:** `feat: add health check and correlation id middleware`
+- **Commit:** `6a9381c` — `feat: add health check and correlation id middleware`
 - **Notes:** Correlation middleware runs first in the pipeline and pushes `CorrelationId` into the logger scope. `public partial class Program` exposes the entry point for `WebApplicationFactory`. No EF.
+
+### Task 5 — Verify build and startup
+
+- **Status:** `[x]` Completed
+- **Files changed:** `docs/IMPLEMENTATION_PLAN.md` (report: `.superpowers/sdd/reports/task-5-report.md`, local)
+- **Verification:** `dotnet build` succeeded (NU1903 advisory on `Microsoft.OpenApi` 2.0.0 noted); `dotnet test` — 4 passed, 0 failed; `HealthAndCorrelationIdTests` — GET `/health` 200, `X-Correlation-Id` generated and client-supplied ID preserved (WebApplicationFactory)
+- **Commit:** _(see Task 5 commit on branch)_
+- **Notes:** Phase 1 foundation complete; Phase 2 (EF) not started.
 
 ---
 

@@ -437,6 +437,155 @@ public sealed class OrderServiceTests
     }
 
     [Fact]
+    public async Task CancelAsync_Missing_IsNotFound()
+    {
+        await using var db = CreateDb();
+        var stock = new FakeStockService();
+        var sut = CreateSut(db, new FakeIdempotencyService(), stock);
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000099");
+
+        var result = await sut.CancelAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("not_found", result.Error!.Code);
+        Assert.Contains(id.ToString(), result.Error.Message, StringComparison.Ordinal);
+        Assert.Empty(stock.Restores);
+    }
+
+    [Fact]
+    public async Task CancelAsync_AlreadyCancelled_IsConflictAndDoesNotRestore()
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), OrderStatus.Cancelled, DateTimeOffset.Parse("2026-03-01T00:00:00Z"));
+        db.ChangeTracker.Clear();
+        var stock = new FakeStockService();
+        var sut = CreateSut(db, new FakeIdempotencyService(), stock);
+
+        var result = await sut.CancelAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("conflict", result.Error!.Code);
+        Assert.Contains("already cancelled", result.Error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(OrderStatus.Cancelled, Assert.Single(db.Orders).Status);
+        Assert.Empty(stock.Restores);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Shipped)]
+    [InlineData(OrderStatus.Delivered)]
+    public async Task CancelAsync_IllegalState_IsBusinessRuleAndDoesNotRestore(OrderStatus from)
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), from, DateTimeOffset.Parse("2026-03-01T00:00:00Z"));
+        db.ChangeTracker.Clear();
+        var stock = new FakeStockService();
+        var sut = CreateSut(db, new FakeIdempotencyService(), stock);
+
+        var result = await sut.CancelAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("business_rule", result.Error!.Code);
+        Assert.Contains(from.ToString(), result.Error.Message, StringComparison.Ordinal);
+        Assert.Equal(from, Assert.Single(db.Orders).Status);
+        Assert.Empty(stock.Restores);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Pending)]
+    [InlineData(OrderStatus.Confirmed)]
+    public async Task CancelAsync_AllowedStatus_RestoresStockAndCancels(OrderStatus from)
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        var createdAt = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), from, createdAt, quantity: 2);
+        db.ChangeTracker.Clear();
+        var stock = new FakeStockService();
+        var sut = CreateSut(db, new FakeIdempotencyService(), stock);
+
+        var result = await sut.CancelAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(nameof(OrderStatus.Cancelled), result.Value.Status);
+        Assert.True(result.Value.UpdatedAt > createdAt);
+        Assert.Equal(2, Assert.Single(result.Value.Items).Quantity);
+        Assert.Equal([(ProductSeed.ScenarioAProductId, 2)], stock.Restores);
+
+        var stored = Assert.Single(db.Orders.Include(o => o.Items));
+        Assert.Equal(OrderStatus.Cancelled, stored.Status);
+        Assert.Equal(result.Value.UpdatedAt, stored.UpdatedAt);
+        Assert.Equal(createdAt, stored.CreatedAt);
+    }
+
+    [Fact]
+    public async Task CancelAsync_MultipleItems_RestoresEachQuantity()
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        var createdAt = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+        db.Orders.Add(new Order
+        {
+            Id = id,
+            CustomerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"),
+            ShippingAddress = "Jl. Test",
+            Status = OrderStatus.Pending,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+            Items =
+            [
+                new OrderItem
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = id,
+                    ProductId = ProductSeed.ScenarioAProductId,
+                    Quantity = 2,
+                    UnitPrice = 10.00m
+                },
+                new OrderItem
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = id,
+                    ProductId = ProductSeed.StandardProductId,
+                    Quantity = 3,
+                    UnitPrice = 4.50m
+                }
+            ]
+        });
+        db.SaveChanges();
+        db.ChangeTracker.Clear();
+        var stock = new FakeStockService();
+        var sut = CreateSut(db, new FakeIdempotencyService(), stock);
+
+        var result = await sut.CancelAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, result.Value.Items.Count);
+        Assert.Equal(
+            [(ProductSeed.ScenarioAProductId, 2), (ProductSeed.StandardProductId, 3)],
+            stock.Restores);
+        Assert.Equal(OrderStatus.Cancelled, Assert.Single(db.Orders).Status);
+    }
+
+    [Fact]
+    public async Task CancelAsync_ConcurrencyConflict_IsConflict()
+    {
+        await using var db = CreateThrowingConcurrencyDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), OrderStatus.Pending, DateTimeOffset.Parse("2026-03-01T00:00:00Z"), quantity: 2);
+        db.ChangeTracker.Clear();
+        var sut = CreateSut(db);
+
+        var result = await sut.CancelAsync(id, CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("conflict", result.Error!.Code);
+        Assert.Contains("modified", result.Error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(OrderStatus.Pending, Assert.Single(db.Orders).Status);
+    }
+
+    [Fact]
     public async Task CreateAsync_Success_PersistsPendingOrderCapturesPriceAndCompletes()
     {
         await using var db = CreateDb();
@@ -614,6 +763,7 @@ public sealed class OrderServiceTests
         public bool DeductSucceeds { get; init; } = true;
         public CancellationTokenSource? CancelAfterDeduct { get; init; }
         public List<(Guid ProductId, int Quantity)> Deducts { get; } = [];
+        public List<(Guid ProductId, int Quantity)> Restores { get; } = [];
 
         public Task<bool> TryDeductAsync(Guid productId, int quantity, CancellationToken ct)
         {
@@ -622,6 +772,10 @@ public sealed class OrderServiceTests
             return Task.FromResult(DeductSucceeds);
         }
 
-        public Task RestoreAsync(Guid productId, int quantity, CancellationToken ct) => Task.CompletedTask;
+        public Task RestoreAsync(Guid productId, int quantity, CancellationToken ct)
+        {
+            Restores.Add((productId, quantity));
+            return Task.CompletedTask;
+        }
     }
 }

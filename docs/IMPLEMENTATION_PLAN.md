@@ -119,7 +119,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - [x] Task 13: Create Order — DTOs, validator, service (transaction + atomic stock deduct + idempotency), `POST /api/orders`.
 - [x] Task 14: Get Order + List Orders (filters + pagination), read-only `AsNoTracking` where appropriate.
 - [x] Task 15: Update Order Status — optimistic concurrency; invalid transition → 409/422 as designed; Skenario B.
-- [ ] Task 16: Cancel Order — Pending/Confirmed only; restore stock atomically; terminal rejection.
+- [x] Task 16: Cancel Order — Pending/Confirmed only; restore stock atomically; terminal rejection.
 
 **Create Order acceptance:** insufficient stock → conflict/error; successful create decreases stock; same `Idempotency-Key` returns same outcome without double stock deduct.
 
@@ -260,6 +260,14 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Follow-up commit:** `fix: reject cancel via PATCH status`
 - **Notes:** `PATCH /api/orders/{id}/status` body `{ "status": "Confirmed" }` (string enum). Loads tracked order (no `AsNoTracking`) so `RowVersion`/xmin can conflict. `OrderStatusTransitions.CanTransition` gates updates; terminal Delivered/Cancelled cannot change. Illegal transition → 422. `DbUpdateConcurrencyException` → 409. PATCH to `Cancelled` is rejected (422) so stock restore stays on `POST /cancel` (Task 16). Concurrent Scenario B against real PostgreSQL deferred to Task 17.
 
+### Task 16 — Cancel Order + stock restore
+
+- **Status:** `[x]` Completed (live cancel-vs-status race deferred to Task 17)
+- **Files changed:** `Controllers/OrdersController.cs`, `Services/OrderService.cs`, `Abstractions/IOrderService.cs`, cancel controller + service tests, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet test` — 142 passed (Pending/Confirmed cancel restores per item; already cancelled → 409; Shipped/Delivered → 422; missing → 404; `DbUpdateConcurrencyException` → 409)
+- **Commit:** `feat: add cancel order with stock restore`
+- **Notes:** `POST /api/orders/{id}/cancel`. Already Cancelled → **409** (no second restore). Not Pending/Confirmed → 422. Transaction wraps `IStockService.RestoreAsync` (`UPDATE … SET StockQuantity = StockQuantity + @qty`) then status Cancelled + `UpdatedAt` + SaveChanges. Restore only adds so stock cannot go negative. Concurrent cancel vs status (xmin) deferred to Task 17.
+
 ---
 
 ## Known Issues / Open Items
@@ -269,3 +277,4 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - Task 13 create-order unit/controller tests do not hit PostgreSQL. Deferred to Task 17: concurrent Scenario A (atomic `UPDATE … WHERE StockQuantity >= @qty`), live `StockService` SQL, transaction rollback of stock + order + pending idempotency, and end-to-end `POST /api/orders` against a migrated database.
 - Product admin CRUD endpoints are optional; seed + test helpers may be enough unless needed for demos.
 - Task 15 status-update unit tests use EF InMemory plus a DbContext stub that throws `DbUpdateConcurrencyException`. Live xmin Scenario B (two concurrent PATCH, one winner + 409) is deferred to Task 17 against real PostgreSQL.
+- Task 16 cancel unit tests use `FakeStockService` + the same concurrency stub. Live restore SQL, transaction rollback of restore+cancel, and cancel-vs-status xmin races are deferred to Task 17 against real PostgreSQL. Already-cancelled choice: **409 Conflict**.

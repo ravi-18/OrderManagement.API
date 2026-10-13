@@ -172,6 +172,63 @@ public sealed class OrderService(
         return Result.Success(ToResponse(order));
     }
 
+    public async Task<Result<OrderResponse>> CancelAsync(Guid id, CancellationToken ct)
+    {
+        var order = await db.Orders
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == id, ct);
+
+        if (order is null)
+        {
+            return Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."));
+        }
+
+        if (order.Status == OrderStatus.Cancelled)
+        {
+            return Result.Failure<OrderResponse>(Error.Conflict("The order is already cancelled."));
+        }
+
+        if (!OrderStatusTransitions.CanTransition(order.Status, OrderStatus.Cancelled))
+        {
+            return Result.Failure<OrderResponse>(
+                Error.BusinessRule($"Cannot cancel order in {order.Status} status."));
+        }
+
+        await using var tx = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
+
+        try
+        {
+            foreach (var item in order.Items.OrderBy(i => i.ProductId).ThenBy(i => i.Id))
+            {
+                await stock.RestoreAsync(item.ProductId, item.Quantity, ct);
+            }
+
+            order.Status = OrderStatus.Cancelled;
+            order.UpdatedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct);
+
+            if (tx is not null)
+            {
+                await tx.CommitAsync(ct);
+            }
+
+            return Result.Success(ToResponse(order));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await RollbackAndDetachAsync(tx);
+            return Result.Failure<OrderResponse>(
+                Error.Conflict("The order was modified by another request."));
+        }
+        catch
+        {
+            await RollbackAndDetachAsync(tx);
+            throw;
+        }
+    }
+
     private async Task<Result<OrderResponse>> CreateNewOrderAsync(
         string idempotencyKey,
         CreateOrderRequest request,

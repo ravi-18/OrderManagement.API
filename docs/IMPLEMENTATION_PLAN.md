@@ -93,7 +93,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 - [ ] Task 6: Add EF Core 10 + Npgsql packages; register `AppDbContext`.
 - [x] Task 7: Implement entities: `Product`, `Order`, `OrderItem`, `IdempotencyRecord` + status enum.
-- [ ] Task 8: EF configurations (PKs, FKs, indexes, unique `IdempotencyRecord.Key`, order concurrency token); initial migration; seed sample products for tests.
+- [x] Task 8: EF configurations (PKs, FKs, indexes, unique `IdempotencyRecord.Key`, order concurrency token); initial migration; seed sample products for tests.
 
 **Verification:** Migration reviewed; apply to approved **dev** DB only; schema matches entities; seed products visible.
 
@@ -210,9 +210,18 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Commit:** `feat: add domain entities for orders products and idempotency`
 - **Notes:** Clean POCOs under `Domain/`; DbSets for Products, Orders, OrderItems, IdempotencyRecords. No Fluent configs or migrations (Task 8). `Order.RowVersion` is `uint` so Task 8 can map it with `IsRowVersion()` to PostgreSQL `xmin`.
 
+### Task 8 — Fluent configs, initial migration, product seed
+
+- **Status:** `[x]` Completed (apply blocked: local Postgres password is still `CHANGE_ME`)
+- **Files changed:** `Data/Configurations/*`, `Data/ProductSeed.cs`, `Data/AppDbContext.cs`, `Data/Migrations/20261013080842_InitialCreate*`, `Data/Migrations/AppDbContextModelSnapshot.cs`, `.config/dotnet-tools.json`, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet build` succeeded; `dotnet ef migrations add InitialCreate`; SQL reviewed (`xmin` not added as a user column; `IdempotencyRecords` PK=`Key`; 3 seed products including stock 15). `dotnet ef database update` failed: `28P01 password authentication failed for user "postgres"`.
+- **Commit:** `feat: add initial migration with concurrency and seed products`
+- **Notes:** Concurrency API: `builder.Property(o => o.RowVersion).IsRowVersion()` (Npgsql 10 maps `uint` rowversion → PostgreSQL `xmin`/`xid`). `UseXminAsConcurrencyToken()` is obsolete/removed. Apply locally: set a real password (or `ConnectionStrings__DefaultConnection`), then `dotnet ef database update --project src/OrderManagement.API/OrderManagement.API.csproj`. Do not use `EnsureCreated` or drop the database.
+
 ---
 
 ## Known Issues / Open Items
 
-- Dev PostgreSQL connection string and whether Docker is available for integration tests — confirm at Task 6/17.
+- Local PostgreSQL is reachable on `localhost:5432` but `Password=CHANGE_ME` fails auth (`28P01`). Task 8 migration is committed; apply after replacing the placeholder (`dotnet ef database update --project src/OrderManagement.API/OrderManagement.API.csproj`).
+- Dev PostgreSQL connection string and whether Docker is available for integration tests — confirm at Task 17.
 - Product admin CRUD endpoints are optional; seed + test helpers may be enough unless needed for demos.

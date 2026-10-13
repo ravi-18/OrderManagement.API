@@ -92,7 +92,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 ### Phase 2 — Persistence
 
 - [ ] Task 6: Add EF Core 10 + Npgsql packages; register `AppDbContext`.
-- [ ] Task 7: Implement entities: `Product`, `Order`, `OrderItem`, `IdempotencyRecord` + status enum.
+- [x] Task 7: Implement entities: `Product`, `Order`, `OrderItem`, `IdempotencyRecord` + status enum.
 - [ ] Task 8: EF configurations (PKs, FKs, indexes, unique `IdempotencyRecord.Key`, order concurrency token); initial migration; seed sample products for tests.
 
 **Verification:** Migration reviewed; apply to approved **dev** DB only; schema matches entities; seed products visible.
@@ -201,6 +201,14 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Verification:** `dotnet build` succeeded (NU1903 advisory on `Microsoft.OpenApi` 2.0.0 noted); `dotnet test` — 4 passed, 0 failed; `HealthAndCorrelationIdTests` — GET `/health` 200, `X-Correlation-Id` generated and client-supplied ID preserved (WebApplicationFactory)
 - **Commit:** `9f7e86e` — `docs: mark phase 1 foundation tasks complete`
 - **Notes:** Phase 1 foundation complete; Phase 2 (EF) not started.
+
+### Task 7 — Domain entities + status enum + DbSets
+
+- **Status:** `[x]` Completed
+- **Files changed:** `Domain/OrderStatus.cs`, `Domain/Product.cs`, `Domain/Order.cs`, `Domain/OrderItem.cs`, `Domain/IdempotencyRecord.cs`, `Data/AppDbContext.cs`, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet build` on solution
+- **Commit:** `feat: add domain entities for orders products and idempotency`
+- **Notes:** Clean POCOs under `Domain/`; DbSets for Products, Orders, OrderItems, IdempotencyRecords. No Fluent configs or migrations (Task 8). `Order.RowVersion` is `uint` so Task 8 can map it with `IsRowVersion()` to PostgreSQL `xmin`.
 
 ---
 

@@ -50,6 +50,24 @@ public sealed class CreateOrderRequestValidatorTests
     }
 
     [Fact]
+    public void Validate_ShippingAddressOver500_IsValidationFailure()
+    {
+        var result = _validator.Validate(ValidRequest() with { ShippingAddress = new string('A', 501) });
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("validation", result.Error!.Code);
+        Assert.Contains("500", result.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_ShippingAddressAt500_Succeeds()
+    {
+        var result = _validator.Validate(ValidRequest() with { ShippingAddress = new string('A', 500) });
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
     public void Validate_ValidRequest_Succeeds()
     {
         var result = _validator.Validate(ValidRequest());

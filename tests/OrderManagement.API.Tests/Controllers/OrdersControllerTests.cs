@@ -63,6 +63,47 @@ public sealed class OrdersControllerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Post_IdempotencyKeyOver256_Returns400ProblemDetails()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/orders");
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", new string('k', 257));
+        request.Content = JsonContent.Create(ValidBody());
+
+        var response = await _client.SendAsync(request);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("validation", json.GetProperty("code").GetString());
+        Assert.Contains("256", json.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Null(_orders.LastKey);
+    }
+
+    [Fact]
+    public async Task Post_IdempotencyKeyAt256_IsAccepted()
+    {
+        var order = new OrderResponse
+        {
+            Id = Guid.Parse("cccccccc-0001-4000-8000-000000000001"),
+            CustomerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"),
+            ShippingAddress = "Jl. Sudirman 1",
+            Status = nameof(OrderStatus.Pending),
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Items = [new OrderItemResponse { ProductId = ProductSeed.ScenarioAProductId, Quantity = 2, UnitPrice = 10.00m }]
+        };
+        _orders.Next = Result.Success(order);
+        var key = new string('k', 256);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/orders");
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
+        request.Content = JsonContent.Create(ValidBody());
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(key, _orders.LastKey);
+    }
+
+    [Fact]
     public async Task Post_HashMismatch_Returns422()
     {
         _orders.Next = Result.Failure<OrderResponse>(

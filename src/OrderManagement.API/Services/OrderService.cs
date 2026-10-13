@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using OrderManagement.API.Abstractions;
 using OrderManagement.API.Common;
 using OrderManagement.API.Contracts.Requests;
@@ -32,7 +33,7 @@ public sealed class OrderService(
         switch (begin.Outcome)
         {
             case IdempotencyBeginOutcome.Replay:
-                return DeserializeReplay(begin.ResponseBody);
+                return DeserializeReplay(begin.ResponseStatus, begin.ResponseBody);
 
             case IdempotencyBeginOutcome.Conflict when begin.ConflictReason == IdempotencyConflictReason.HashMismatch:
                 return Result.Failure<OrderResponse>(
@@ -48,14 +49,14 @@ public sealed class OrderService(
             var created = await CreateNewOrderAsync(idempotencyKey, request, ct);
             if (created.IsFailure)
             {
-                await AbandonPendingIdempotencyAsync(idempotencyKey, ct);
+                await AbandonAfterFailureAsync(idempotencyKey);
             }
 
             return created;
         }
         catch
         {
-            await AbandonPendingIdempotencyAsync(idempotencyKey, ct);
+            await AbandonAfterFailureAsync(idempotencyKey);
             throw;
         }
     }
@@ -88,11 +89,7 @@ public sealed class OrderService(
                 var deducted = await stock.TryDeductAsync(item.ProductId, item.Quantity, ct);
                 if (!deducted)
                 {
-                    if (tx is not null)
-                    {
-                        await tx.RollbackAsync(ct);
-                    }
-
+                    await RollbackAndDetachAsync(tx);
                     return Result.Failure<OrderResponse>(
                         Error.Conflict("Insufficient stock for one or more products."));
                 }
@@ -132,31 +129,39 @@ public sealed class OrderService(
         }
         catch
         {
-            if (tx is not null)
-            {
-                await tx.RollbackAsync(ct);
-            }
-
+            await RollbackAndDetachAsync(tx);
             throw;
         }
     }
 
-    private async Task AbandonPendingIdempotencyAsync(string key, CancellationToken ct)
+    private async Task AbandonAfterFailureAsync(string key)
     {
-        var record = await db.IdempotencyRecords
-            .FirstOrDefaultAsync(r => r.Key == key && r.ResponseStatus == 0, ct);
-
-        if (record is null)
-        {
-            return;
-        }
-
-        db.IdempotencyRecords.Remove(record);
-        await db.SaveChangesAsync(ct);
+        db.ChangeTracker.Clear();
+        await idempotency.AbandonAsync(key, CancellationToken.None);
     }
 
-    private static Result<OrderResponse> DeserializeReplay(string? responseBody)
+    private async Task RollbackAndDetachAsync(IDbContextTransaction? tx)
     {
+        try
+        {
+            if (tx is not null)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+            }
+        }
+        finally
+        {
+            db.ChangeTracker.Clear();
+        }
+    }
+
+    private static Result<OrderResponse> DeserializeReplay(int? responseStatus, string? responseBody)
+    {
+        if (responseStatus is not StatusCodes.Status201Created)
+        {
+            return Result.Failure<OrderResponse>(MapStoredReplayStatus(responseStatus));
+        }
+
         if (string.IsNullOrWhiteSpace(responseBody))
         {
             return Result.Failure<OrderResponse>(
@@ -168,6 +173,19 @@ public sealed class OrderService(
             ? Result.Failure<OrderResponse>(Error.Conflict("Stored idempotent response could not be replayed."))
             : Result.Success(cached);
     }
+
+    private static Error MapStoredReplayStatus(int? status) => status switch
+    {
+        StatusCodes.Status400BadRequest =>
+            Error.Validation("Stored idempotent response indicates a validation failure."),
+        StatusCodes.Status404NotFound =>
+            Error.NotFound("Stored idempotent response indicates the resource was not found."),
+        StatusCodes.Status409Conflict =>
+            Error.Conflict("Stored idempotent response indicates a conflict."),
+        StatusCodes.Status422UnprocessableEntity =>
+            Error.BusinessRule("Stored idempotent response indicates a business rule violation."),
+        _ => Error.Conflict("Stored idempotent response could not be replayed with the original status.")
+    };
 
     private static OrderResponse ToResponse(Order order) => new()
     {

@@ -238,9 +238,10 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 - **Status:** `[x]` Completed (live PostgreSQL create/concurrency deferred to Task 17)
 - **Files changed:** `Controllers/OrdersController.cs`, `Contracts/Requests|Responses`, `Validators/CreateOrderRequestValidator.cs`, `Services/OrderService.cs`, `Services/StockService.cs`, `Services/RequestHash.cs`, `Abstractions/IOrderService.cs`, `Abstractions/IStockService.cs`, `Program.cs` (`AddControllers`/`MapControllers`; weather sample removed), create-order tests, `docs/IMPLEMENTATION_PLAN.md`
-- **Verification:** `dotnet test` — 92 passed (validator, request hash, OrderService with fakes + EF InMemory, controller ProblemDetails mapping)
+- **Verification:** `dotnet test` — 101 passed after review fixes (validator, request hash, OrderService with fakes + EF InMemory, idempotency abandon, controller ProblemDetails mapping)
 - **Commit:** `feat: add create order with atomic stock`
-- **Notes:** Missing `Idempotency-Key` → 400. Hash mismatch → 422 (`business_rule`). In-flight → **409** (retryable). Insufficient stock → 409. Replay returns cached 201 body without a second deduct. Failed create abandons the pending idempotency row so the same key can retry. Atomic SQL + Scenario A concurrency need real PostgreSQL (Task 17).
+- **Follow-up commit:** `fix: harden create-order rollback and idempotency abandon`
+- **Notes:** Missing `Idempotency-Key` → 400 (also length > 256). ShippingAddress max 500 → 400. Hash mismatch → 422 (`business_rule`). In-flight → **409** (retryable). Insufficient stock → 409. Replay of stored **201** returns cached body; non-201 stored status maps to a failure Result (honors stored status). Failed create: rollback with `CancellationToken.None`, `ChangeTracker.Clear()`, then `IIdempotencyService.AbandonAsync` with `None` so an Added Order cannot persist without stock deduct. Atomic SQL + Scenario A concurrency need real PostgreSQL (Task 17).
 
 ---
 

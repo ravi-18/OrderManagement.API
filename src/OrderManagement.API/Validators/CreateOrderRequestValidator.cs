@@ -5,6 +5,8 @@ namespace OrderManagement.API.Validators;
 
 public sealed class CreateOrderRequestValidator
 {
+    public const int ShippingAddressMaxLength = 500;
+
     public Result Validate(CreateOrderRequest request)
     {
         if (request.CustomerId == Guid.Empty)
@@ -15,6 +17,11 @@ public sealed class CreateOrderRequestValidator
         if (string.IsNullOrWhiteSpace(request.ShippingAddress))
         {
             return Result.Failure(Error.Validation("ShippingAddress is required."));
+        }
+
+        if (request.ShippingAddress.Trim().Length > ShippingAddressMaxLength)
+        {
+            return Result.Failure(Error.Validation("ShippingAddress must be 500 characters or fewer."));
         }
 
         if (request.Items is null || request.Items.Count == 0)

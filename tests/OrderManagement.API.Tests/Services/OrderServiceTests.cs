@@ -98,6 +98,37 @@ public sealed class OrderServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ReplayNonSuccessStatus_ReturnsMappedFailureWithoutDeduct()
+    {
+        await using var db = CreateDb();
+        var cached = new OrderResponse
+        {
+            Id = Guid.Parse("cccccccc-0001-4000-8000-000000000001"),
+            CustomerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"),
+            ShippingAddress = "Jl. Sudirman 1",
+            Status = nameof(OrderStatus.Pending),
+            CreatedAt = DateTimeOffset.Parse("2026-10-13T00:00:00Z"),
+            UpdatedAt = DateTimeOffset.Parse("2026-10-13T00:00:00Z"),
+            Items = [new OrderItemResponse { ProductId = ProductSeed.ScenarioAProductId, Quantity = 2, UnitPrice = 10.00m }]
+        };
+        var idempotency = new FakeIdempotencyService
+        {
+            BeginResult = IdempotencyBeginResult.Replay(409, JsonSerializer.Serialize(cached))
+        };
+        var stock = new FakeStockService();
+        var sut = CreateSut(db, idempotency, stock);
+
+        var result = await sut.CreateAsync("key-1", ValidRequest(), CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("conflict", result.Error!.Code);
+        Assert.Equal(0, idempotency.CompleteCalls);
+        Assert.Equal(0, idempotency.AbandonCalls);
+        Assert.Empty(stock.Deducts);
+        Assert.Empty(db.Orders);
+    }
+
+    [Fact]
     public async Task CreateAsync_InsufficientStock_IsConflictAndDoesNotComplete()
     {
         await using var db = CreateDb();
@@ -111,7 +142,47 @@ public sealed class OrderServiceTests
         Assert.Equal("conflict", result.Error!.Code);
         Assert.Contains("stock", result.Error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, idempotency.CompleteCalls);
+        Assert.Equal(1, idempotency.AbandonCalls);
+        Assert.Equal("key-1", idempotency.LastAbandonedKey);
+        Assert.Equal(CancellationToken.None, idempotency.LastAbandonToken);
         Assert.Empty(db.Orders);
+    }
+
+    [Fact]
+    public async Task CreateAsync_InsufficientStockAfterCancel_AbandonsWithNoneToken()
+    {
+        await using var db = CreateDb();
+        using var cts = new CancellationTokenSource();
+        var idempotency = new FakeIdempotencyService();
+        var stock = new FakeStockService { DeductSucceeds = false, CancelAfterDeduct = cts };
+        var sut = CreateSut(db, idempotency, stock);
+
+        var result = await sut.CreateAsync("key-1", ValidRequest(), cts.Token);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal(1, idempotency.AbandonCalls);
+        Assert.Equal(CancellationToken.None, idempotency.LastAbandonToken);
+        Assert.False(idempotency.LastAbandonToken.CanBeCanceled);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenOrderSaveFails_ClearsChangeTrackerAndAbandons()
+    {
+        await using var db = CreateThrowingOnAddedOrderDb();
+        var idempotency = new FakeIdempotencyService();
+        var stock = new FakeStockService();
+        var sut = CreateSut(db, idempotency, stock);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.CreateAsync("key-1", ValidRequest(), CancellationToken.None));
+
+        Assert.DoesNotContain(
+            db.ChangeTracker.Entries<Order>(),
+            e => e.State is EntityState.Added or EntityState.Modified);
+        Assert.Empty(db.Orders);
+        Assert.Equal(1, idempotency.AbandonCalls);
+        Assert.Equal(CancellationToken.None, idempotency.LastAbandonToken);
+        Assert.Equal(0, idempotency.CompleteCalls);
     }
 
     [Fact]
@@ -132,6 +203,8 @@ public sealed class OrderServiceTests
         Assert.Equal("not_found", result.Error!.Code);
         Assert.Empty(stock.Deducts);
         Assert.Equal(0, idempotency.CompleteCalls);
+        Assert.Equal(1, idempotency.AbandonCalls);
+        Assert.Equal(CancellationToken.None, idempotency.LastAbandonToken);
     }
 
     [Fact]
@@ -168,6 +241,22 @@ public sealed class OrderServiceTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         var db = new AppDbContext(options);
+        SeedProduct(db);
+        return db;
+    }
+
+    private static ThrowWhenSavingAddedOrdersDbContext CreateThrowingOnAddedOrderDb()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        var db = new ThrowWhenSavingAddedOrdersDbContext(options);
+        SeedProduct(db);
+        return db;
+    }
+
+    private static void SeedProduct(AppDbContext db)
+    {
         db.Products.Add(new Product
         {
             Id = ProductSeed.ScenarioAProductId,
@@ -176,7 +265,6 @@ public sealed class OrderServiceTests
             Price = 10.00m
         });
         db.SaveChanges();
-        return db;
     }
 
     private static CreateOrderRequest ValidRequest() => new()
@@ -191,8 +279,11 @@ public sealed class OrderServiceTests
         public IdempotencyBeginResult BeginResult { get; init; } = IdempotencyBeginResult.Created();
         public int BeginCalls { get; private set; }
         public int CompleteCalls { get; private set; }
+        public int AbandonCalls { get; private set; }
         public int LastCompletedStatus { get; private set; }
         public string LastCompletedBody { get; private set; } = string.Empty;
+        public string LastAbandonedKey { get; private set; } = string.Empty;
+        public CancellationToken LastAbandonToken { get; private set; }
 
         public Task<IdempotencyBeginResult> BeginAsync(string key, string requestHash, CancellationToken ct)
         {
@@ -207,16 +298,40 @@ public sealed class OrderServiceTests
             LastCompletedBody = responseBody;
             return Task.CompletedTask;
         }
+
+        public Task AbandonAsync(string key, CancellationToken ct)
+        {
+            AbandonCalls++;
+            LastAbandonedKey = key;
+            LastAbandonToken = ct;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowWhenSavingAddedOrdersDbContext(DbContextOptions<AppDbContext> options)
+        : AppDbContext(options)
+    {
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (ChangeTracker.Entries<Order>().Any(e => e.State == EntityState.Added))
+            {
+                throw new InvalidOperationException("simulated order persist failure");
+            }
+
+            return base.SaveChangesAsync(cancellationToken);
+        }
     }
 
     private sealed class FakeStockService : IStockService
     {
         public bool DeductSucceeds { get; init; } = true;
+        public CancellationTokenSource? CancelAfterDeduct { get; init; }
         public List<(Guid ProductId, int Quantity)> Deducts { get; } = [];
 
         public Task<bool> TryDeductAsync(Guid productId, int quantity, CancellationToken ct)
         {
             Deducts.Add((productId, quantity));
+            CancelAfterDeduct?.Cancel();
             return Task.FromResult(DeductSucceeds);
         }
 

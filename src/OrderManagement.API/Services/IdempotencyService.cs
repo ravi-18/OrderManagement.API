@@ -56,4 +56,18 @@ public sealed class IdempotencyService(AppDbContext db) : IIdempotencyService
         record.ResponseBody = responseBody;
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task AbandonAsync(string key, CancellationToken ct)
+    {
+        var record = await db.IdempotencyRecords
+            .FirstOrDefaultAsync(r => r.Key == key && r.ResponseStatus == 0, ct);
+
+        if (record is null)
+        {
+            return;
+        }
+
+        db.IdempotencyRecords.Remove(record);
+        await db.SaveChangesAsync(ct);
+    }
 }

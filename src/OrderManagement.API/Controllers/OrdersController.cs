@@ -10,6 +10,8 @@ namespace OrderManagement.API.Controllers;
 [Route("api/orders")]
 public sealed class OrdersController(IOrderService orders) : ControllerBase
 {
+    public const int IdempotencyKeyMaxLength = 256;
+
     [HttpPost]
     [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
@@ -23,6 +25,11 @@ public sealed class OrdersController(IOrderService orders) : ControllerBase
         if (string.IsNullOrWhiteSpace(idempotencyKey))
         {
             return Error.Validation("Idempotency-Key header is required.").ToProblem();
+        }
+
+        if (idempotencyKey.Length > IdempotencyKeyMaxLength)
+        {
+            return Error.Validation("Idempotency-Key must be 256 characters or fewer.").ToProblem();
         }
 
         var result = await orders.CreateAsync(idempotencyKey, request, ct);

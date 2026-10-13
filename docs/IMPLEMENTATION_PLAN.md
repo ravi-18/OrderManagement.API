@@ -161,8 +161,8 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Status:** `[x]` Completed
 - **Files changed:** `docs/IMPLEMENTATION_PLAN.md`, `docs/superpowers/specs/2026-10-13-order-management-design.md`
 - **Verification:** Manual review against FRD functional + non-functional requirements
-- **Commit:** (pending this change)
-- **Notes:** Decisions locked — single-project layering; Idempotency-Key; hybrid concurrency; PostgreSQL
+- **Commit:** `136deca` — `docs: align implementation plan and design with FRD`
+- **Notes:** Decisions locked — single-project layering; Idempotency-Key; hybrid concurrency; PostgreSQL. `.gitignore` fixed so `docs/` is tracked (FRD.pdf remains ignored as local binary).
 
 ---
 

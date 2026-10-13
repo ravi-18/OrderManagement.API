@@ -199,7 +199,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Status:** `[x]` Completed
 - **Files changed:** `docs/IMPLEMENTATION_PLAN.md` (report: `.superpowers/sdd/reports/task-5-report.md`, local)
 - **Verification:** `dotnet build` succeeded (NU1903 advisory on `Microsoft.OpenApi` 2.0.0 noted); `dotnet test` — 4 passed, 0 failed; `HealthAndCorrelationIdTests` — GET `/health` 200, `X-Correlation-Id` generated and client-supplied ID preserved (WebApplicationFactory)
-- **Commit:** _(see Task 5 commit on branch)_
+- **Commit:** `9f7e86e` — `docs: mark phase 1 foundation tasks complete`
 - **Notes:** Phase 1 foundation complete; Phase 2 (EF) not started.
 
 ---

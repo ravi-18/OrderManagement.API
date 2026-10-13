@@ -103,7 +103,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 ### Phase 3 — Reusable Cross-Cutting
 
-- [ ] Task 9: Add `Result` / `Error` types and domain exceptions (not found, conflict, validation, business).
+- [x] Task 9: Add `Result` / `Error` types and domain exceptions (not found, conflict, validation, business).
 - [ ] Task 10: Global exception / result → `ProblemDetails` mapping (400/404/409/422).
 - [ ] Task 11: `IIdempotencyService` + store using unique constraint (Skenario C foundation).
 

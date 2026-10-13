@@ -257,7 +257,8 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Files changed:** `Controllers/OrdersController.cs`, `Services/OrderService.cs`, `Abstractions/IOrderService.cs`, `Contracts/Requests/UpdateOrderStatusRequest.cs`, status controller + service tests, `docs/IMPLEMENTATION_PLAN.md`
 - **Verification:** `dotnet test` — 127 passed (illegal transition → 422 `business_rule`; missing → 404; success Pending→Confirmed; `DbUpdateConcurrencyException` → 409)
 - **Commit:** `feat: add update order status with optimistic lock`
-- **Notes:** `PATCH /api/orders/{id}/status` body `{ "status": "Confirmed" }` (string enum). Loads tracked order (no `AsNoTracking`) so `RowVersion`/xmin can conflict. `OrderStatusTransitions.CanTransition` gates updates; terminal Delivered/Cancelled cannot change. Illegal transition → 422. `DbUpdateConcurrencyException` → 409. Concurrent Scenario B against real PostgreSQL deferred to Task 17.
+- **Follow-up commit:** `fix: reject cancel via PATCH status`
+- **Notes:** `PATCH /api/orders/{id}/status` body `{ "status": "Confirmed" }` (string enum). Loads tracked order (no `AsNoTracking`) so `RowVersion`/xmin can conflict. `OrderStatusTransitions.CanTransition` gates updates; terminal Delivered/Cancelled cannot change. Illegal transition → 422. `DbUpdateConcurrencyException` → 409. PATCH to `Cancelled` is rejected (422) so stock restore stays on `POST /cancel` (Task 16). Concurrent Scenario B against real PostgreSQL deferred to Task 17.
 
 ---
 

@@ -367,6 +367,29 @@ public sealed class OrderServiceTests
         Assert.Equal(from, Assert.Single(db.Orders).Status);
     }
 
+    [Theory]
+    [InlineData(OrderStatus.Pending)]
+    [InlineData(OrderStatus.Confirmed)]
+    public async Task UpdateStatusAsync_CancelledTarget_IsBusinessRuleWithoutChangingStatus(OrderStatus from)
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), from, DateTimeOffset.Parse("2026-03-01T00:00:00Z"));
+        db.ChangeTracker.Clear();
+        var sut = CreateSut(db);
+
+        var result = await sut.UpdateStatusAsync(
+            id,
+            new UpdateOrderStatusRequest { Status = OrderStatus.Cancelled },
+            CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("business_rule", result.Error!.Code);
+        Assert.Contains("POST /api/orders/", result.Error.Message, StringComparison.Ordinal);
+        Assert.Contains("cancel", result.Error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(from, Assert.Single(db.Orders).Status);
+    }
+
     [Fact]
     public async Task UpdateStatusAsync_ValidTransition_UpdatesStatusAndUpdatedAt()
     {

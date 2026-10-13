@@ -143,6 +143,13 @@ public sealed class OrderService(
             return Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."));
         }
 
+        if (request.Status == OrderStatus.Cancelled
+            && OrderStatusTransitions.CanTransition(order.Status, OrderStatus.Cancelled))
+        {
+            return Result.Failure<OrderResponse>(
+                Error.BusinessRule("Cancel orders via POST /api/orders/{id}/cancel."));
+        }
+
         if (!OrderStatusTransitions.CanTransition(order.Status, request.Status))
         {
             return Result.Failure<OrderResponse>(

@@ -1,8 +1,12 @@
 ## Cursor / IDE
 .cursor/
 .vscode/
+.vs/
+.idea/
 *.user
 *.suo
+*.userosscache
+*.sln.docstates
 
 ## Build
 bin/

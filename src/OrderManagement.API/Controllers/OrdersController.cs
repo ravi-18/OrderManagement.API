@@ -78,4 +78,18 @@ public sealed class OrdersController(IOrderService orders) : ControllerBase
 
         return result.IsFailure ? result.ToProblem() : TypedResults.Ok(result.Value);
     }
+
+    [HttpPatch("{id:guid}/status")]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IResult> UpdateStatus(
+        Guid id,
+        [FromBody] UpdateOrderStatusRequest request,
+        CancellationToken ct)
+    {
+        var result = await orders.UpdateStatusAsync(id, request, ct);
+        return result.IsFailure ? result.ToProblem() : TypedResults.Ok(result.Value);
+    }
 }

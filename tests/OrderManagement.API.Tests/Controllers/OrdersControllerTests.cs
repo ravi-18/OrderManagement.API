@@ -242,6 +242,67 @@ public sealed class OrdersControllerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PatchStatus_Success_Returns200WithOrder()
+    {
+        var order = SampleOrder() with { Status = nameof(OrderStatus.Confirmed) };
+        _orders.UpdateNext = Result.Success(order);
+
+        var response = await SendPatchStatusAsync(order.Id, """{"status":"Confirmed"}""");
+        var body = await response.Content.ReadFromJsonAsync<OrderResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(order.Id, _orders.LastUpdateId);
+        Assert.Equal(OrderStatus.Confirmed, _orders.LastUpdateRequest!.Status);
+        Assert.Equal(order.Id, body!.Id);
+        Assert.Equal(nameof(OrderStatus.Confirmed), body.Status);
+    }
+
+    [Fact]
+    public async Task PatchStatus_MissingOrder_Returns404ProblemDetails()
+    {
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000099");
+        _orders.UpdateNext = Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."));
+
+        var response = await SendPatchStatusAsync(id, """{"status":"Confirmed"}""");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(404, json.GetProperty("status").GetInt32());
+        Assert.Equal("not_found", json.GetProperty("code").GetString());
+        Assert.Equal(id, _orders.LastUpdateId);
+    }
+
+    [Fact]
+    public async Task PatchStatus_IllegalTransition_Returns422ProblemDetails()
+    {
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        _orders.UpdateNext = Result.Failure<OrderResponse>(
+            Error.BusinessRule("Cannot transition order from Pending to Shipped."));
+
+        var response = await SendPatchStatusAsync(id, """{"status":"Shipped"}""");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal("business_rule", json.GetProperty("code").GetString());
+        Assert.Equal(OrderStatus.Shipped, _orders.LastUpdateRequest!.Status);
+    }
+
+    [Fact]
+    public async Task PatchStatus_ConcurrencyConflict_Returns409ProblemDetails()
+    {
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        _orders.UpdateNext = Result.Failure<OrderResponse>(
+            Error.Conflict("The order was modified by another request."));
+
+        var response = await SendPatchStatusAsync(id, """{"status":"Confirmed"}""");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("conflict", json.GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task Post_Success_Returns201WithOrderBody()
     {
         var order = new OrderResponse
@@ -273,6 +334,15 @@ public sealed class OrdersControllerTests : IAsyncLifetime
         return await _client.SendAsync(request);
     }
 
+    private Task<HttpResponseMessage> SendPatchStatusAsync(Guid id, string json)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Patch, $"/api/orders/{id}/status")
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+        };
+        return _client.SendAsync(request);
+    }
+
     private static CreateOrderRequest ValidBody() => new()
     {
         CustomerId = Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"),
@@ -296,9 +366,12 @@ public sealed class OrdersControllerTests : IAsyncLifetime
         public Result<OrderResponse>? Next { get; set; }
         public Result<OrderResponse>? GetNext { get; set; }
         public Result<PagedResponse<OrderResponse>>? ListNext { get; set; }
+        public Result<OrderResponse>? UpdateNext { get; set; }
         public string? LastKey { get; private set; }
         public Guid? LastGetId { get; private set; }
         public ListOrdersQuery? LastListQuery { get; private set; }
+        public Guid? LastUpdateId { get; private set; }
+        public UpdateOrderStatusRequest? LastUpdateRequest { get; private set; }
 
         public Task<Result<OrderResponse>> CreateAsync(string idempotencyKey, CreateOrderRequest request, CancellationToken ct)
         {
@@ -316,6 +389,13 @@ public sealed class OrdersControllerTests : IAsyncLifetime
         {
             LastListQuery = query;
             return Task.FromResult(ListNext ?? throw new InvalidOperationException("ListNext result was not configured."));
+        }
+
+        public Task<Result<OrderResponse>> UpdateStatusAsync(Guid id, UpdateOrderStatusRequest request, CancellationToken ct)
+        {
+            LastUpdateId = id;
+            LastUpdateRequest = request;
+            return Task.FromResult(UpdateNext ?? throw new InvalidOperationException("UpdateNext result was not configured."));
         }
     }
 }

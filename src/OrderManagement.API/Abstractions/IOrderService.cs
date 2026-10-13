@@ -11,4 +11,6 @@ public interface IOrderService
     Task<Result<OrderResponse>> GetByIdAsync(Guid id, CancellationToken ct);
 
     Task<Result<PagedResponse<OrderResponse>>> ListAsync(ListOrdersQuery query, CancellationToken ct);
+
+    Task<Result<OrderResponse>> UpdateStatusAsync(Guid id, UpdateOrderStatusRequest request, CancellationToken ct);
 }

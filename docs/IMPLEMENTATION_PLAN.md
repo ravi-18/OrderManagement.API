@@ -118,7 +118,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - [ ] Task 12: Domain status transition rules (valid/invalid matrix from FRD); unit tests.
 - [x] Task 13: Create Order — DTOs, validator, service (transaction + atomic stock deduct + idempotency), `POST /api/orders`.
 - [x] Task 14: Get Order + List Orders (filters + pagination), read-only `AsNoTracking` where appropriate.
-- [ ] Task 15: Update Order Status — optimistic concurrency; invalid transition → 409/422 as designed; Skenario B.
+- [x] Task 15: Update Order Status — optimistic concurrency; invalid transition → 409/422 as designed; Skenario B.
 - [ ] Task 16: Cancel Order — Pending/Confirmed only; restore stock atomically; terminal rejection.
 
 **Create Order acceptance:** insufficient stock → conflict/error; successful create decreases stock; same `Idempotency-Key` returns same outcome without double stock deduct.
@@ -251,6 +251,14 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Commit:** `feat: add get and list orders`
 - **Notes:** `GET /api/orders/{id}` returns `OrderResponse` with items (404 if missing). `GET /api/orders` filters `status`, `customerId`, `from`/`to` (inclusive `CreatedAt`), `page` default 1, `pageSize` default 20 max 100 (invalid → 400). Paged body `{ items, page, pageSize, totalCount }`. Reads use `AsNoTracking`; DTOs only. List ordered by `CreatedAt` desc, then `Id`. Status/cancel not in this task.
 
+### Task 15 — Update Order Status (optimistic concurrency)
+
+- **Status:** `[x]` Completed (live Scenario B concurrency deferred to Task 17)
+- **Files changed:** `Controllers/OrdersController.cs`, `Services/OrderService.cs`, `Abstractions/IOrderService.cs`, `Contracts/Requests/UpdateOrderStatusRequest.cs`, status controller + service tests, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet test` — 127 passed (illegal transition → 422 `business_rule`; missing → 404; success Pending→Confirmed; `DbUpdateConcurrencyException` → 409)
+- **Commit:** `feat: add update order status with optimistic lock`
+- **Notes:** `PATCH /api/orders/{id}/status` body `{ "status": "Confirmed" }` (string enum). Loads tracked order (no `AsNoTracking`) so `RowVersion`/xmin can conflict. `OrderStatusTransitions.CanTransition` gates updates; terminal Delivered/Cancelled cannot change. Illegal transition → 422. `DbUpdateConcurrencyException` → 409. Concurrent Scenario B against real PostgreSQL deferred to Task 17.
+
 ---
 
 ## Known Issues / Open Items
@@ -259,3 +267,4 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - Dev PostgreSQL connection string and whether Docker is available for integration tests — confirm at Task 17. Concurrent Scenario C (unique-key race + replay) is deferred to Task 17 against real PostgreSQL; Task 11 covers decision + 23505 unit tests only.
 - Task 13 create-order unit/controller tests do not hit PostgreSQL. Deferred to Task 17: concurrent Scenario A (atomic `UPDATE … WHERE StockQuantity >= @qty`), live `StockService` SQL, transaction rollback of stock + order + pending idempotency, and end-to-end `POST /api/orders` against a migrated database.
 - Product admin CRUD endpoints are optional; seed + test helpers may be enough unless needed for demos.
+- Task 15 status-update unit tests use EF InMemory plus a DbContext stub that throws `DbUpdateConcurrencyException`. Live xmin Scenario B (two concurrent PATCH, one winner + 409) is deferred to Task 17 against real PostgreSQL.

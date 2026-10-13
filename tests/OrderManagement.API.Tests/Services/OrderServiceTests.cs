@@ -321,6 +321,99 @@ public sealed class OrderServiceTests
     }
 
     [Fact]
+    public async Task UpdateStatusAsync_Missing_IsNotFound()
+    {
+        await using var db = CreateDb();
+        var sut = CreateSut(db);
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000099");
+
+        var result = await sut.UpdateStatusAsync(
+            id,
+            new UpdateOrderStatusRequest { Status = OrderStatus.Confirmed },
+            CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("not_found", result.Error!.Code);
+        Assert.Contains(id.ToString(), result.Error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Pending, OrderStatus.Shipped)]
+    [InlineData(OrderStatus.Pending, OrderStatus.Delivered)]
+    [InlineData(OrderStatus.Pending, OrderStatus.Pending)]
+    [InlineData(OrderStatus.Confirmed, OrderStatus.Pending)]
+    [InlineData(OrderStatus.Confirmed, OrderStatus.Delivered)]
+    [InlineData(OrderStatus.Shipped, OrderStatus.Confirmed)]
+    [InlineData(OrderStatus.Shipped, OrderStatus.Cancelled)]
+    [InlineData(OrderStatus.Delivered, OrderStatus.Shipped)]
+    [InlineData(OrderStatus.Cancelled, OrderStatus.Pending)]
+    public async Task UpdateStatusAsync_IllegalTransition_IsBusinessRule(OrderStatus from, OrderStatus to)
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), from, DateTimeOffset.Parse("2026-03-01T00:00:00Z"));
+        db.ChangeTracker.Clear();
+        var sut = CreateSut(db);
+
+        var result = await sut.UpdateStatusAsync(
+            id,
+            new UpdateOrderStatusRequest { Status = to },
+            CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("business_rule", result.Error!.Code);
+        Assert.Contains(from.ToString(), result.Error.Message, StringComparison.Ordinal);
+        Assert.Contains(to.ToString(), result.Error.Message, StringComparison.Ordinal);
+        Assert.Equal(from, Assert.Single(db.Orders).Status);
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_ValidTransition_UpdatesStatusAndUpdatedAt()
+    {
+        await using var db = CreateDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        var createdAt = DateTimeOffset.Parse("2026-03-01T00:00:00Z");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), OrderStatus.Pending, createdAt, quantity: 2);
+        db.ChangeTracker.Clear();
+        var sut = CreateSut(db);
+
+        var result = await sut.UpdateStatusAsync(
+            id,
+            new UpdateOrderStatusRequest { Status = OrderStatus.Confirmed },
+            CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(nameof(OrderStatus.Confirmed), result.Value.Status);
+        Assert.True(result.Value.UpdatedAt > createdAt);
+        Assert.Equal(2, Assert.Single(result.Value.Items).Quantity);
+
+        var stored = Assert.Single(db.Orders.Include(o => o.Items));
+        Assert.Equal(OrderStatus.Confirmed, stored.Status);
+        Assert.Equal(result.Value.UpdatedAt, stored.UpdatedAt);
+        Assert.Equal(createdAt, stored.CreatedAt);
+        Assert.NotEmpty(db.ChangeTracker.Entries<Order>());
+    }
+
+    [Fact]
+    public async Task UpdateStatusAsync_ConcurrencyConflict_IsConflict()
+    {
+        await using var db = CreateThrowingConcurrencyDb();
+        var id = Guid.Parse("cccccccc-0001-4000-8000-000000000001");
+        SeedOrder(db, id, Guid.Parse("bbbbbbbb-0001-4000-8000-000000000001"), OrderStatus.Pending, DateTimeOffset.Parse("2026-03-01T00:00:00Z"));
+        db.ChangeTracker.Clear();
+        var sut = CreateSut(db);
+
+        var result = await sut.UpdateStatusAsync(
+            id,
+            new UpdateOrderStatusRequest { Status = OrderStatus.Confirmed },
+            CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("conflict", result.Error!.Code);
+        Assert.Contains("modified", result.Error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task CreateAsync_Success_PersistsPendingOrderCapturesPriceAndCompletes()
     {
         await using var db = CreateDb();
@@ -402,6 +495,16 @@ public sealed class OrderServiceTests
         return db;
     }
 
+    private static ThrowConcurrencyOnModifiedOrderDbContext CreateThrowingConcurrencyDb()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        var db = new ThrowConcurrencyOnModifiedOrderDbContext(options);
+        SeedProduct(db);
+        return db;
+    }
+
     private static void SeedProduct(AppDbContext db)
     {
         db.Products.Add(new Product
@@ -463,6 +566,20 @@ public sealed class OrderServiceTests
             if (ChangeTracker.Entries<Order>().Any(e => e.State == EntityState.Added))
             {
                 throw new InvalidOperationException("simulated order persist failure");
+            }
+
+            return base.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private sealed class ThrowConcurrencyOnModifiedOrderDbContext(DbContextOptions<AppDbContext> options)
+        : AppDbContext(options)
+    {
+        public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            if (ChangeTracker.Entries<Order>().Any(e => e.State == EntityState.Modified))
+            {
+                throw new DbUpdateConcurrencyException("simulated status concurrency conflict");
             }
 
             return base.SaveChangesAsync(cancellationToken);

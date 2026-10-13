@@ -129,6 +129,42 @@ public sealed class OrderService(
         });
     }
 
+    public async Task<Result<OrderResponse>> UpdateStatusAsync(
+        Guid id,
+        UpdateOrderStatusRequest request,
+        CancellationToken ct)
+    {
+        var order = await db.Orders
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == id, ct);
+
+        if (order is null)
+        {
+            return Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."));
+        }
+
+        if (!OrderStatusTransitions.CanTransition(order.Status, request.Status))
+        {
+            return Result.Failure<OrderResponse>(
+                Error.BusinessRule($"Cannot transition order from {order.Status} to {request.Status}."));
+        }
+
+        order.Status = request.Status;
+        order.UpdatedAt = DateTimeOffset.UtcNow;
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Result.Failure<OrderResponse>(
+                Error.Conflict("The order was modified by another request."));
+        }
+
+        return Result.Success(ToResponse(order));
+    }
+
     private async Task<Result<OrderResponse>> CreateNewOrderAsync(
         string idempotencyKey,
         CreateOrderRequest request,

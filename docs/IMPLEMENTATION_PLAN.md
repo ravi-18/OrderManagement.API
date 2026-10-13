@@ -131,7 +131,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 ### Phase 5 — Quality, Concurrency Tests, Docs
 
-- [ ] Task 17: Unit + integration tests; **mandatory** concurrent coverage for Skenario A, B, and C (at least one required by FRD; implement all three).
+- [x] Task 17: Unit + integration tests; **mandatory** concurrent coverage for Skenario A, B, and C (at least one required by FRD; implement all three).
 - [ ] Task 18: README — idempotency justification, concurrency strategy, ≥2 extra race conditions, local setup, env vars, migration commands, example requests.
 - [ ] Task 19: Final verification — full test suite, secret/config review, update this plan’s Progress Log.
 
@@ -268,13 +268,18 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Commit:** `feat: add cancel order with stock restore`
 - **Notes:** `POST /api/orders/{id}/cancel`. Already Cancelled → **409** (no second restore). Not Pending/Confirmed → 422. Transaction wraps `IStockService.RestoreAsync` (`UPDATE … SET StockQuantity = StockQuantity + @qty`) then status Cancelled + `UpdatedAt` + SaveChanges. Restore only adds so stock cannot go negative. Concurrent cancel vs status (xmin) deferred to Task 17.
 
+### Task 17 — Concurrent integration tests (Scenarios A, B, C)
+
+- **Status:** `[x]` Completed
+- **Files changed:** `tests/OrderManagement.API.Tests/PostgresApiFactory.cs`, `tests/OrderManagement.API.Tests/Concurrency/ConcurrentOrderTests.cs`, `tests/OrderManagement.API.Tests/OrderManagement.API.Tests.csproj`, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet test` with `ConnectionStrings__DefaultConnection` → dedicated DB `order_management_tests` — 145 passed, 0 skipped (A/B/C all green on real PostgreSQL). Docker CLI not installed; Testcontainers not added.
+- **Commit:** `test: add concurrent stock status and idempotency tests`
+- **Notes:** Fixture applies EF migrations; `[PostgresFact]` skips with a clear reason if Postgres is unreachable. A: two qty-10 creates vs stock 15 → at most one 201, stock never negative. B: two parallel PATCH Confirmed→Shipped → one 200, other 409/422, final Shipped. C: same Idempotency-Key race → exactly one order; 409 in-flight retried to replay. PATCH Cancelled remains 422 so B uses two Shipped PATCHes (xmin). Tests never drop unrelated databases.
+
 ---
 
 ## Known Issues / Open Items
 
-- Local PostgreSQL is reachable on `localhost:5432` but `Password=CHANGE_ME` fails auth (`28P01`). Task 8 migration is committed; apply after replacing the placeholder (`dotnet ef database update --project src/OrderManagement.API/OrderManagement.API.csproj`).
-- Dev PostgreSQL connection string and whether Docker is available for integration tests — confirm at Task 17. Concurrent Scenario C (unique-key race + replay) is deferred to Task 17 against real PostgreSQL; Task 11 covers decision + 23505 unit tests only.
-- Task 13 create-order unit/controller tests do not hit PostgreSQL. Deferred to Task 17: concurrent Scenario A (atomic `UPDATE … WHERE StockQuantity >= @qty`), live `StockService` SQL, transaction rollback of stock + order + pending idempotency, and end-to-end `POST /api/orders` against a migrated database.
+- Local `appsettings` still uses `Password=CHANGE_ME`. Concurrent tests require `ConnectionStrings__DefaultConnection` or `TEST_DATABASE_URL` (they force database `order_management_tests`). Docker CLI is not installed, so Testcontainers is not used.
 - Product admin CRUD endpoints are optional; seed + test helpers may be enough unless needed for demos.
-- Task 15 status-update unit tests use EF InMemory plus a DbContext stub that throws `DbUpdateConcurrencyException`. Live xmin Scenario B (two concurrent PATCH, one winner + 409) is deferred to Task 17 against real PostgreSQL.
-- Task 16 cancel unit tests use `FakeStockService` + the same concurrency stub. Live restore SQL, transaction rollback of restore+cancel, and cancel-vs-status xmin races are deferred to Task 17 against real PostgreSQL. Already-cancelled choice: **409 Conflict**.
+- Extra race conditions (cancel vs status, double cancel) are documented in Task 18 README, not additional live tests.

@@ -1,12 +1,15 @@
 using Microsoft.EntityFrameworkCore;
+using OrderManagement.API.Abstractions;
 using OrderManagement.API.Data;
 using OrderManagement.API.Middleware;
+using OrderManagement.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // --- Service registration (DbContext, application services, validators: later tasks) ---
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+builder.Services.AddScoped<IIdempotencyService, IdempotencyService>();
 builder.Services.AddOpenApi();
 builder.Services.AddHealthChecks();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();

@@ -105,7 +105,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 - [x] Task 9: Add `Result` / `Error` types and domain exceptions (not found, conflict, validation, business).
 - [x] Task 10: Global exception / result → `ProblemDetails` mapping (400/404/409/422).
-- [ ] Task 11: `IIdempotencyService` + store using unique constraint (Skenario C foundation).
+- [x] Task 11: `IIdempotencyService` + store using unique constraint (Skenario C foundation).
 
 **Verification:** Unit tests for Result mapping / status helper if present; build passes.
 
@@ -226,10 +226,18 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Commit:** `feat: add ProblemDetails error mapping pipeline`
 - **Notes:** `IExceptionHandler` maps domain exceptions to 400/404/409/422 and unhandled to 500 without stack/secrets. Correlation header is applied in `OnStarting` so it survives `ExceptionHandlerMiddleware` clearing the response. Domain `ValidationException` aliased vs BCL.
 
+### Task 11 — IIdempotencyService + store
+
+- **Status:** `[x]` Completed
+- **Files changed:** `Abstractions/IIdempotencyService.cs`, `Abstractions/IdempotencyBeginResult.cs`, `Services/IdempotencyService.cs`, `Services/IdempotencyDecision.cs`, `Data/PostgresUniqueViolation.cs`, `Program.cs` (scoped DI), decision + 23505 unit tests, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet test` — 37 passed (4 decision, 5 unique-violation helper, existing)
+- **Commit:** `feat: add idempotency record service`
+- **Notes:** Begin insert-or-get via PK unique constraint; catch Postgres `23505`. Hash mismatch → `Conflict(HashMismatch)` (422 at Create Order). Matching hash + stored status → Replay. Matching hash + in-flight (status 0) → `Conflict(InFlight)` retryable. Create Order not wired (Task 13). Concurrent Scenario C tests deferred to Task 17 (real PostgreSQL).
+
 ---
 
 ## Known Issues / Open Items
 
 - Local PostgreSQL is reachable on `localhost:5432` but `Password=CHANGE_ME` fails auth (`28P01`). Task 8 migration is committed; apply after replacing the placeholder (`dotnet ef database update --project src/OrderManagement.API/OrderManagement.API.csproj`).
-- Dev PostgreSQL connection string and whether Docker is available for integration tests — confirm at Task 17.
+- Dev PostgreSQL connection string and whether Docker is available for integration tests — confirm at Task 17. Concurrent Scenario C (unique-key race + replay) is deferred to Task 17 against real PostgreSQL; Task 11 covers decision + 23505 unit tests only.
 - Product admin CRUD endpoints are optional; seed + test helpers may be enough unless needed for demos.

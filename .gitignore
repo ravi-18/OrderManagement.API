@@ -1,0 +1,41 @@
+## Cursor / IDE
+.cursor/
+.vscode/
+*.user
+*.suo
+
+## Build
+bin/
+obj/
+out/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+*.dll
+*.exe
+*.pdb
+
+## NuGet
+*.nupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+
+## Test / coverage
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+## User secrets / local env
+appsettings.*.local.json
+*.local.json
+.env
+.env.*
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## Local FRD copy (large binary; keep out of git unless needed)
+FRD.pdf

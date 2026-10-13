@@ -116,7 +116,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 ### Phase 4 — Domain Rules & Order API
 
 - [ ] Task 12: Domain status transition rules (valid/invalid matrix from FRD); unit tests.
-- [ ] Task 13: Create Order — DTOs, validator, service (transaction + atomic stock deduct + idempotency), `POST /api/orders`.
+- [x] Task 13: Create Order — DTOs, validator, service (transaction + atomic stock deduct + idempotency), `POST /api/orders`.
 - [ ] Task 14: Get Order + List Orders (filters + pagination), read-only `AsNoTracking` where appropriate.
 - [ ] Task 15: Update Order Status — optimistic concurrency; invalid transition → 409/422 as designed; Skenario B.
 - [ ] Task 16: Cancel Order — Pending/Confirmed only; restore stock atomically; terminal rejection.
@@ -234,10 +234,19 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Commit:** `feat: add idempotency record service`
 - **Notes:** Begin insert-or-get via PK unique constraint; catch Postgres `23505`. Hash mismatch → `Conflict(HashMismatch)` (422 at Create Order). Matching hash + stored status → Replay. Matching hash + in-flight (status 0) → `Conflict(InFlight)` retryable. Create Order not wired (Task 13). Concurrent Scenario C tests deferred to Task 17 (real PostgreSQL).
 
+### Task 13 — Create Order (atomic stock + idempotency)
+
+- **Status:** `[x]` Completed (live PostgreSQL create/concurrency deferred to Task 17)
+- **Files changed:** `Controllers/OrdersController.cs`, `Contracts/Requests|Responses`, `Validators/CreateOrderRequestValidator.cs`, `Services/OrderService.cs`, `Services/StockService.cs`, `Services/RequestHash.cs`, `Abstractions/IOrderService.cs`, `Abstractions/IStockService.cs`, `Program.cs` (`AddControllers`/`MapControllers`; weather sample removed), create-order tests, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet test` — 92 passed (validator, request hash, OrderService with fakes + EF InMemory, controller ProblemDetails mapping)
+- **Commit:** `feat: add create order with atomic stock`
+- **Notes:** Missing `Idempotency-Key` → 400. Hash mismatch → 422 (`business_rule`). In-flight → **409** (retryable). Insufficient stock → 409. Replay returns cached 201 body without a second deduct. Failed create abandons the pending idempotency row so the same key can retry. Atomic SQL + Scenario A concurrency need real PostgreSQL (Task 17).
+
 ---
 
 ## Known Issues / Open Items
 
 - Local PostgreSQL is reachable on `localhost:5432` but `Password=CHANGE_ME` fails auth (`28P01`). Task 8 migration is committed; apply after replacing the placeholder (`dotnet ef database update --project src/OrderManagement.API/OrderManagement.API.csproj`).
 - Dev PostgreSQL connection string and whether Docker is available for integration tests — confirm at Task 17. Concurrent Scenario C (unique-key race + replay) is deferred to Task 17 against real PostgreSQL; Task 11 covers decision + 23505 unit tests only.
+- Task 13 create-order unit/controller tests do not hit PostgreSQL. Deferred to Task 17: concurrent Scenario A (atomic `UPDATE … WHERE StockQuantity >= @qty`), live `StockService` SQL, transaction rollback of stock + order + pending idempotency, and end-to-end `POST /api/orders` against a migrated database.
 - Product admin CRUD endpoints are optional; seed + test helpers may be enough unless needed for demos.

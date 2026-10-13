@@ -1,0 +1,37 @@
+using Microsoft.AspNetCore.Mvc;
+using OrderManagement.API.Abstractions;
+using OrderManagement.API.Common;
+using OrderManagement.API.Contracts.Requests;
+using OrderManagement.API.Contracts.Responses;
+
+namespace OrderManagement.API.Controllers;
+
+[ApiController]
+[Route("api/orders")]
+public sealed class OrdersController(IOrderService orders) : ControllerBase
+{
+    [HttpPost]
+    [ProducesResponseType(typeof(OrderResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IResult> Create(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] CreateOrderRequest request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            return Error.Validation("Idempotency-Key header is required.").ToProblem();
+        }
+
+        var result = await orders.CreateAsync(idempotencyKey, request, ct);
+        if (result.IsFailure)
+        {
+            return result.ToProblem();
+        }
+
+        var order = result.Value;
+        return TypedResults.Created($"/api/orders/{order.Id}", order);
+    }
+}

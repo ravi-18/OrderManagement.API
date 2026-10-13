@@ -1,6 +1,18 @@
 @OrderManagement.API_HostAddress = http://localhost:5196
 
-GET {{OrderManagement.API_HostAddress}}/weatherforecast/
-Accept: application/json
+POST {{OrderManagement.API_HostAddress}}/api/orders
+Content-Type: application/json
+Idempotency-Key: demo-create-1
+
+{
+  "customerId": "bbbbbbbb-0001-4000-8000-000000000001",
+  "shippingAddress": "Jl. Sudirman 1",
+  "items": [
+    {
+      "productId": "aaaaaaaa-0001-4000-8000-000000000001",
+      "quantity": 2
+    }
+  ]
+}
 
 ###

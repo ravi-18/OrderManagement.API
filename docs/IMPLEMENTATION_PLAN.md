@@ -80,7 +80,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - [ ] Task 1: Create solution + Web API project (`net10.0`) + test project skeleton.
 - [ ] Task 2: Add `.gitignore`, basic `README` stub, connection string placeholder (no secrets).
 - [ ] Task 3: Configure DI baseline, nullable, implicit usings, OpenAPI.
-- [ ] Task 4: Add health check + correlation ID middleware (`X-Correlation-Id`).
+- [x] Task 4: Add health check + correlation ID middleware (`X-Correlation-Id`).
 - [ ] Task 5: Verify `dotnet build` and app starts locally.
 
 **Verification:** `dotnet build`; run API; `GET /health` (or map equivalent) returns success; correlation ID appears on responses/logs.
@@ -163,6 +163,14 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Verification:** Manual review against FRD functional + non-functional requirements
 - **Commit:** `136deca` — `docs: align implementation plan and design with FRD`
 - **Notes:** Decisions locked — single-project layering; Idempotency-Key; hybrid concurrency; PostgreSQL. `.gitignore` fixed so `docs/` is tracked (FRD.pdf remains ignored as local binary).
+
+### Task 4 — Health check + correlation ID middleware
+
+- **Status:** `[x]` Completed
+- **Files changed:** `Program.cs`, `Middleware/CorrelationIdMiddleware.cs`, health/correlation WebApplicationFactory tests, `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet build`; `dotnet test` filter `HealthAndCorrelationIdTests` — 3 passed (GET `/health` 200; generated `X-Correlation-Id`; client-supplied ID preserved)
+- **Commit:** `feat: add health check and correlation id middleware`
+- **Notes:** Correlation middleware runs first in the pipeline and pushes `CorrelationId` into the logger scope. `public partial class Program` exposes the entry point for `WebApplicationFactory`. No EF.
 
 ---
 

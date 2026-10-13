@@ -91,7 +91,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 ### Phase 2 — Persistence
 
-- [ ] Task 6: Add EF Core 10 + Npgsql packages; register `AppDbContext`.
+- [x] Task 6: Add EF Core 10 + Npgsql packages; register `AppDbContext`.
 - [x] Task 7: Implement entities: `Product`, `Order`, `OrderItem`, `IdempotencyRecord` + status enum.
 - [x] Task 8: EF configurations (PKs, FKs, indexes, unique `IdempotencyRecord.Key`, order concurrency token); initial migration; seed sample products for tests.
 
@@ -115,7 +115,7 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 
 ### Phase 4 — Domain Rules & Order API
 
-- [ ] Task 12: Domain status transition rules (valid/invalid matrix from FRD); unit tests.
+- [x] Task 12: Domain status transition rules (valid/invalid matrix from FRD); unit tests.
 - [x] Task 13: Create Order — DTOs, validator, service (transaction + atomic stock deduct + idempotency), `POST /api/orders`.
 - [x] Task 14: Get Order + List Orders (filters + pagination), read-only `AsNoTracking` where appropriate.
 - [x] Task 15: Update Order Status — optimistic concurrency; invalid transition → 409/422 as designed; Skenario B.
@@ -132,8 +132,8 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 ### Phase 5 — Quality, Concurrency Tests, Docs
 
 - [x] Task 17: Unit + integration tests; **mandatory** concurrent coverage for Skenario A, B, and C (at least one required by FRD; implement all three).
-- [ ] Task 18: README — idempotency justification, concurrency strategy, ≥2 extra race conditions, local setup, env vars, migration commands, example requests.
-- [ ] Task 19: Final verification — full test suite, secret/config review, update this plan’s Progress Log.
+- [x] Task 18: README — idempotency justification, concurrency strategy, ≥2 extra race conditions, local setup, env vars, migration commands, example requests.
+- [x] Task 19: Final verification — full test suite, secret/config review, update this plan’s Progress Log.
 
 **Verification:** `dotnet test` green; concurrent tests demonstrate correct behavior under parallel load.
 
@@ -274,12 +274,32 @@ Acceptance criteria: plan and design document FRD endpoints, concurrency, idempo
 - **Files changed:** `tests/OrderManagement.API.Tests/PostgresApiFactory.cs`, `tests/OrderManagement.API.Tests/Concurrency/ConcurrentOrderTests.cs`, `tests/OrderManagement.API.Tests/OrderManagement.API.Tests.csproj`, `docs/IMPLEMENTATION_PLAN.md`
 - **Verification:** `dotnet test` with `ConnectionStrings__DefaultConnection` → dedicated DB `order_management_tests` — 145 passed, 0 skipped (A/B/C all green on real PostgreSQL). Docker CLI not installed; Testcontainers not added.
 - **Commit:** `test: add concurrent stock status and idempotency tests`
-- **Notes:** Fixture applies EF migrations; `[PostgresFact]` skips with a clear reason if Postgres is unreachable. A: two qty-10 creates vs stock 15 → at most one 201, stock never negative. B: two parallel PATCH Confirmed→Shipped → one 200, other 409/422, final Shipped. C: same Idempotency-Key race → exactly one order; 409 in-flight retried to replay. PATCH Cancelled remains 422 so B uses two Shipped PATCHes (xmin). Tests never drop unrelated databases.
+- **Notes:** Fixture applies EF migrations; `[PostgresFact]` skips with a clear reason if Postgres is unreachable. A: two qty-10 creates vs stock 15 → at most one 201, stock never negative. B: two parallel PATCH Confirmed→Shipped → one 200, other 409/422, final Shipped. C: same Idempotency-Key race → exactly one order; 409 in-flight retried to replay. PATCH Cancelled remains 422 so B uses two Shipped PATCHes (xmin). Tests never drop unrelated databases. **Review:** Approved — no Critical/Important issues.
+
+### Task 18 — README (setup, concurrency, races)
+
+- **Status:** `[x]` Completed
+- **Files changed:** `README.md`
+- **Verification:** Manual checklist vs brief — overview, why PostgreSQL, idempotency unique-key justification, A/B/C mapping, extra races (cancel vs status, double cancel, hash mismatch, abandon-after-failure), local setup (`dotnet ef`, env override, `dotnet test`), curl examples, `X-Correlation-Id`.
+- **Commit:** `1779796` — `docs: document setup concurrency and race conditions`
+- **Notes:** No real secrets in README (placeholders only). Extra races documented rather than additional live tests.
+
+### Task 19 — Final verification
+
+- **Status:** `[x]` Completed
+- **Files changed:** `docs/IMPLEMENTATION_PLAN.md`
+- **Verification:** `dotnet build` succeeded (NU1903 advisory on `Microsoft.OpenApi` 2.0.0). `dotnet test` with env `ConnectionStrings__DefaultConnection` → dedicated DB `order_management_tests` — **145 passed, 0 failed, 0 skipped**. Secret/config review: only `Password=CHANGE_ME` placeholders in `appsettings.Development.json` and test fallback; `.gitignore` excludes `.env` / `*.local.json`; no `.pem`/`.pfx`/user-secrets in git.
+- **Commit:** `docs: finalize implementation plan verification`
+- **Notes:** Tasks 1–19 marked complete (including previously unchecked Task 6 and Task 12 checkboxes). Not pushed; not merged to master.
 
 ---
 
 ## Known Issues / Open Items
 
-- Local `appsettings` still uses `Password=CHANGE_ME`. Concurrent tests require `ConnectionStrings__DefaultConnection` or `TEST_DATABASE_URL` (they force database `order_management_tests`). Docker CLI is not installed, so Testcontainers is not used.
-- Product admin CRUD endpoints are optional; seed + test helpers may be enough unless needed for demos.
-- Extra race conditions (cancel vs status, double cancel) are documented in Task 18 README, not additional live tests.
+- Local `appsettings.Development.json` still uses `Password=CHANGE_ME`. Runtime and concurrent tests need `ConnectionStrings__DefaultConnection` or `TEST_DATABASE_URL` (tests force database `order_management_tests`). Do not commit a real password.
+- Docker CLI is not installed, so Testcontainers is not used; `[PostgresFact]` skips if PostgreSQL is unreachable.
+- Product admin CRUD endpoints are optional and out of scope; seed products cover demos and concurrent tests.
+- Extra races (cancel vs status, double cancel) are documented in README and covered by unit tests / xmin, not additional live parallel tests.
+- `Microsoft.OpenApi` 2.0.0 (transitive via `Microsoft.AspNetCore.OpenApi` 10.0.9) has advisory NU1903; not upgraded in this prototype.
+- Authentication / authorization remains out of scope (FRD does not require it).
+- Dev database `order_management` is not auto-migrated; apply with `dotnet ef database update` after setting a local password.

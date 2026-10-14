@@ -109,27 +109,80 @@ Every response includes `X-Correlation-Id`.
 Host=localhost;Port=5432;Database=order_management;Username=postgres;Password=CHANGE_ME
 ```
 
-Do **not** commit a real password. Override locally with an environment variable (or user secrets):
+Do **not** commit a real password. Replace `CHANGE_ME` locally via environment variable (recommended) before migrate/run:
+
+**Bash / Git Bash**
 
 ```bash
 export ConnectionStrings__DefaultConnection="Host=localhost;Port=5432;Database=order_management;Username=postgres;Password=YOUR_LOCAL_PASSWORD"
 ```
 
-On Windows (PowerShell): `$env:ConnectionStrings__DefaultConnection="..."`.
+**PowerShell**
 
-### Restore tools, migrate, run
+```powershell
+$env:ConnectionStrings__DefaultConnection = "Host=localhost;Port=5432;Database=order_management;Username=postgres;Password=YOUR_LOCAL_PASSWORD"
+```
+
+**CMD**
+
+```bat
+set ConnectionStrings__DefaultConnection=Host=localhost;Port=5432;Database=order_management;Username=postgres;Password=YOUR_LOCAL_PASSWORD
+```
+
+### Initialize database (EF migrations)
+
+This creates the `order_management` database (if missing), applies `InitialCreate`, and seeds products.
 
 ```bash
+# from repo root
 dotnet tool restore
-dotnet ef database update --project src/OrderManagement.API/OrderManagement.API.csproj
+
+dotnet ef database update \
+  --project src/OrderManagement.API/OrderManagement.API.csproj \
+  --startup-project src/OrderManagement.API/OrderManagement.API.csproj
+```
+
+Or use the helper scripts (they require `ConnectionStrings__DefaultConnection` to be set):
+
+```bash
+# Git Bash
+./scripts/update-database.sh
+
+# PowerShell
+./scripts/update-database.ps1
+```
+
+Useful checks:
+
+```bash
+# list migrations
+dotnet ef migrations list \
+  --project src/OrderManagement.API/OrderManagement.API.csproj \
+  --startup-project src/OrderManagement.API/OrderManagement.API.csproj
+
+# generate SQL without applying (optional review)
+dotnet ef migrations script \
+  --project src/OrderManagement.API/OrderManagement.API.csproj \
+  --startup-project src/OrderManagement.API/OrderManagement.API.csproj \
+  --output migration.sql
+```
+
+If auth fails (`28P01`), the password in the connection string is wrong — fix the env var (do not commit secrets).
+
+### Run the API
+
+```bash
 dotnet run --project src/OrderManagement.API
+# or press F5 in Cursor (profile: OrderManagement.API (Swagger))
 ```
 
 HTTP profile: `http://localhost:5196`. HTTPS: `https://localhost:7265`.
 
-Health check: `GET /health` → 200.
-
-OpenAPI (Development): `/openapi/v1.json`.
+| Endpoint | Notes |
+|---|---|
+| `GET /health` | Liveness |
+| `GET /swagger` | Swagger UI (Development) |
+| `GET /openapi/v1.json` | OpenAPI document (Development) |
 
 Seeded products (after migrate):
 

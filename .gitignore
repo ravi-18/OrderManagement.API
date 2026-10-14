@@ -1,8 +1,11 @@
 ## Cursor / IDE
 .cursor/
-.vscode/
 .vs/
 .idea/
+# Keep shared F5 / build launchers; ignore other local VS Code settings
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 *.user
 *.suo
 *.userosscache

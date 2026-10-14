@@ -15,6 +15,16 @@ builder.Services.AddScoped<IOrderService, OrderService>();
 builder.Services.AddSingleton<CreateOrderRequestValidator>();
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new()
+    {
+        Title = "Order Management API",
+        Version = "v1",
+        Description = "Order management prototype with idempotency and concurrency-safe stock handling."
+    });
+});
 builder.Services.AddHealthChecks();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 builder.Services.AddProblemDetails();
@@ -27,6 +37,12 @@ app.UseExceptionHandler();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "Order Management API v1");
+        options.RoutePrefix = "swagger";
+    });
 }
 
 app.UseHttpsRedirection();

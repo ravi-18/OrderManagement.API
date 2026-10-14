@@ -154,17 +154,7 @@ dotnet ef database update \
   --startup-project src/OrderManagement.API/OrderManagement.API.csproj
 ```
 
-Or use the helper scripts (they require `ConnectionStrings__DefaultConnection` to be set):
-
-```bash
-# Git Bash
-./scripts/update-database.sh
-
-# PowerShell
-./scripts/update-database.ps1
-```
-
-Useful checks:
+Set `ConnectionStrings__DefaultConnection` first (see above). Useful checks:
 
 ```bash
 # list migrations
@@ -290,6 +280,4 @@ ProblemDetails with an extra `code` (`validation`, `not_found`, `conflict`, `bus
 OrderManagement.sln
 src/OrderManagement.API/     # Web API (Controllers, Services, Domain, Data, Middleware)
 tests/OrderManagement.API.Tests/
-docs/IMPLEMENTATION_PLAN.md
-docs/superpowers/specs/      # design spec
 ```

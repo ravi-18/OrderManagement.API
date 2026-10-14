@@ -4,7 +4,7 @@ using OrderManagement.API.Data;
 
 namespace OrderManagement.API.Services;
 
-public sealed class StockService(AppDbContext db) : IStockService
+public sealed class StockService(AppDbContext db, ILogger<StockService> logger) : IStockService
 {
     public async Task<bool> TryDeductAsync(Guid productId, int quantity, CancellationToken ct)
     {
@@ -16,7 +16,23 @@ public sealed class StockService(AppDbContext db) : IStockService
             """,
             ct);
 
-        return rows > 0;
+        var deducted = rows > 0;
+        if (deducted)
+        {
+            logger.LogInformation(
+                "Stock deducted for ProductId {ProductId} Quantity {Quantity}",
+                productId,
+                quantity);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Stock deduct failed for ProductId {ProductId} Quantity {Quantity}",
+                productId,
+                quantity);
+        }
+
+        return deducted;
     }
 
     public async Task RestoreAsync(Guid productId, int quantity, CancellationToken ct)
@@ -28,5 +44,10 @@ public sealed class StockService(AppDbContext db) : IStockService
             WHERE "Id" = {productId}
             """,
             ct);
+
+        logger.LogInformation(
+            "Stock restored for ProductId {ProductId} Quantity {Quantity}",
+            productId,
+            quantity);
     }
 }

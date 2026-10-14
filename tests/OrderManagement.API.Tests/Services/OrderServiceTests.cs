@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using OrderManagement.API.Abstractions;
 using OrderManagement.API.Contracts.Requests;
 using OrderManagement.API.Contracts.Responses;
@@ -614,7 +615,7 @@ public sealed class OrderServiceTests
         CreateSut(db, new FakeIdempotencyService(), new FakeStockService());
 
     private static OrderService CreateSut(AppDbContext db, IIdempotencyService idempotency, IStockService stock) =>
-        new(db, idempotency, stock, new CreateOrderRequestValidator());
+        new(db, idempotency, stock, new CreateOrderRequestValidator(), NullLogger<OrderService>.Instance);
 
     private static void SeedOrder(
         AppDbContext db,

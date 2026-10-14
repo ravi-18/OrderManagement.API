@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using OrderManagement.API.Data;
 using OrderManagement.API.Domain;
 using OrderManagement.API.Services;
@@ -30,7 +31,7 @@ public sealed class IdempotencyServiceTests
             });
         await db.SaveChangesAsync();
 
-        var sut = new IdempotencyService(db);
+        var sut = new IdempotencyService(db, NullLogger<IdempotencyService>.Instance);
         await sut.AbandonAsync("pending-key", CancellationToken.None);
 
         Assert.Null(await db.IdempotencyRecords.AsNoTracking().FirstOrDefaultAsync(r => r.Key == "pending-key"));
@@ -51,7 +52,7 @@ public sealed class IdempotencyServiceTests
         });
         await db.SaveChangesAsync();
 
-        var sut = new IdempotencyService(db);
+        var sut = new IdempotencyService(db, NullLogger<IdempotencyService>.Instance);
         await sut.AbandonAsync("completed-key", CancellationToken.None);
         await sut.AbandonAsync("missing-key", CancellationToken.None);
 

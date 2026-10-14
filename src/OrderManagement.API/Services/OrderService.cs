@@ -14,7 +14,8 @@ public sealed class OrderService(
     AppDbContext db,
     IIdempotencyService idempotency,
     IStockService stock,
-    CreateOrderRequestValidator validator) : IOrderService
+    CreateOrderRequestValidator validator,
+    ILogger<OrderService> logger) : IOrderService
 {
     public async Task<Result<OrderResponse>> CreateAsync(
         string idempotencyKey,
@@ -24,6 +25,11 @@ public sealed class OrderService(
         var validation = validator.Validate(request);
         if (validation.IsFailure)
         {
+            logger.LogWarning(
+                "Create order rejected by validation for CustomerId {CustomerId}: {ErrorCode} {ErrorMessage}",
+                request.CustomerId,
+                validation.Error!.Code,
+                validation.Error.Message);
             return Result.Failure<OrderResponse>(validation.Error!);
         }
 
@@ -33,13 +39,23 @@ public sealed class OrderService(
         switch (begin.Outcome)
         {
             case IdempotencyBeginOutcome.Replay:
+                logger.LogInformation(
+                    "Create order replaying idempotent response for IdempotencyKey {IdempotencyKey} with status {ResponseStatus}",
+                    idempotencyKey,
+                    begin.ResponseStatus);
                 return DeserializeReplay(begin.ResponseStatus, begin.ResponseBody);
 
             case IdempotencyBeginOutcome.Conflict when begin.ConflictReason == IdempotencyConflictReason.HashMismatch:
+                logger.LogWarning(
+                    "Create order idempotency hash mismatch for IdempotencyKey {IdempotencyKey}",
+                    idempotencyKey);
                 return Result.Failure<OrderResponse>(
                     Error.BusinessRule("Idempotency-Key was reused with a different request body."));
 
             case IdempotencyBeginOutcome.Conflict:
+                logger.LogWarning(
+                    "Create order idempotency in-flight conflict for IdempotencyKey {IdempotencyKey}",
+                    idempotencyKey);
                 return Result.Failure<OrderResponse>(
                     Error.Conflict("A request with this Idempotency-Key is already in progress."));
         }
@@ -49,13 +65,24 @@ public sealed class OrderService(
             var created = await CreateNewOrderAsync(idempotencyKey, request, ct);
             if (created.IsFailure)
             {
+                logger.LogWarning(
+                    "Create order failed for IdempotencyKey {IdempotencyKey} CustomerId {CustomerId}: {ErrorCode} {ErrorMessage}",
+                    idempotencyKey,
+                    request.CustomerId,
+                    created.Error!.Code,
+                    created.Error.Message);
                 await AbandonAfterFailureAsync(idempotencyKey);
             }
 
             return created;
         }
-        catch
+        catch (Exception ex)
         {
+            logger.LogError(
+                ex,
+                "Create order threw for IdempotencyKey {IdempotencyKey} CustomerId {CustomerId}",
+                idempotencyKey,
+                request.CustomerId);
             await AbandonAfterFailureAsync(idempotencyKey);
             throw;
         }
@@ -140,18 +167,30 @@ public sealed class OrderService(
 
         if (order is null)
         {
+            logger.LogWarning("Update status failed; order {OrderId} was not found", id);
             return Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."));
         }
+
+        var fromStatus = order.Status;
 
         if (request.Status == OrderStatus.Cancelled
             && OrderStatusTransitions.CanTransition(order.Status, OrderStatus.Cancelled))
         {
+            logger.LogWarning(
+                "Update status rejected cancel via PATCH for OrderId {OrderId} from {FromStatus}",
+                id,
+                fromStatus);
             return Result.Failure<OrderResponse>(
                 Error.BusinessRule("Cancel orders via POST /api/orders/{id}/cancel."));
         }
 
         if (!OrderStatusTransitions.CanTransition(order.Status, request.Status))
         {
+            logger.LogWarning(
+                "Update status illegal transition for OrderId {OrderId} from {FromStatus} to {ToStatus}",
+                id,
+                fromStatus,
+                request.Status);
             return Result.Failure<OrderResponse>(
                 Error.BusinessRule($"Cannot transition order from {order.Status} to {request.Status}."));
         }
@@ -165,10 +204,20 @@ public sealed class OrderService(
         }
         catch (DbUpdateConcurrencyException)
         {
+            logger.LogWarning(
+                "Update status concurrency conflict for OrderId {OrderId} from {FromStatus} to {ToStatus}",
+                id,
+                fromStatus,
+                request.Status);
             return Result.Failure<OrderResponse>(
                 Error.Conflict("The order was modified by another request."));
         }
 
+        logger.LogInformation(
+            "Order status updated for OrderId {OrderId} from {FromStatus} to {ToStatus}",
+            id,
+            fromStatus,
+            request.Status);
         return Result.Success(ToResponse(order));
     }
 
@@ -180,20 +229,27 @@ public sealed class OrderService(
 
         if (order is null)
         {
+            logger.LogWarning("Cancel failed; order {OrderId} was not found", id);
             return Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."));
         }
 
         if (order.Status == OrderStatus.Cancelled)
         {
+            logger.LogWarning("Cancel rejected; order {OrderId} is already cancelled", id);
             return Result.Failure<OrderResponse>(Error.Conflict("The order is already cancelled."));
         }
 
         if (!OrderStatusTransitions.CanTransition(order.Status, OrderStatus.Cancelled))
         {
+            logger.LogWarning(
+                "Cancel illegal for OrderId {OrderId} in status {FromStatus}",
+                id,
+                order.Status);
             return Result.Failure<OrderResponse>(
                 Error.BusinessRule($"Cannot cancel order in {order.Status} status."));
         }
 
+        var fromStatus = order.Status;
         await using var tx = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(ct)
             : null;
@@ -214,17 +270,24 @@ public sealed class OrderService(
                 await tx.CommitAsync(ct);
             }
 
+            logger.LogInformation(
+                "Order cancelled for OrderId {OrderId} from {FromStatus}; restored {ItemCount} line item(s)",
+                id,
+                fromStatus,
+                order.Items.Count);
             return Result.Success(ToResponse(order));
         }
         catch (DbUpdateConcurrencyException)
         {
             await RollbackAndDetachAsync(tx);
+            logger.LogWarning("Cancel concurrency conflict for OrderId {OrderId}", id);
             return Result.Failure<OrderResponse>(
                 Error.Conflict("The order was modified by another request."));
         }
-        catch
+        catch (Exception ex)
         {
             await RollbackAndDetachAsync(tx);
+            logger.LogError(ex, "Cancel threw for OrderId {OrderId}", id);
             throw;
         }
     }
@@ -243,6 +306,10 @@ public sealed class OrderService(
         var missing = productIds.FirstOrDefault(id => !products.ContainsKey(id));
         if (missing != Guid.Empty)
         {
+            logger.LogWarning(
+                "Create order missing product {ProductId} for IdempotencyKey {IdempotencyKey}",
+                missing,
+                idempotencyKey);
             return Result.Failure<OrderResponse>(Error.NotFound($"Product '{missing}' was not found."));
         }
 
@@ -258,6 +325,11 @@ public sealed class OrderService(
                 if (!deducted)
                 {
                     await RollbackAndDetachAsync(tx);
+                    logger.LogWarning(
+                        "Create order insufficient stock for ProductId {ProductId} Quantity {Quantity} IdempotencyKey {IdempotencyKey}",
+                        item.ProductId,
+                        item.Quantity,
+                        idempotencyKey);
                     return Result.Failure<OrderResponse>(
                         Error.Conflict("Insufficient stock for one or more products."));
                 }
@@ -293,11 +365,22 @@ public sealed class OrderService(
                 await tx.CommitAsync(ct);
             }
 
+            logger.LogInformation(
+                "Order created OrderId {OrderId} CustomerId {CustomerId} IdempotencyKey {IdempotencyKey} ItemCount {ItemCount}",
+                order.Id,
+                order.CustomerId,
+                idempotencyKey,
+                order.Items.Count);
             return Result.Success(response);
         }
-        catch
+        catch (Exception ex)
         {
             await RollbackAndDetachAsync(tx);
+            logger.LogError(
+                ex,
+                "Create order transaction failed for IdempotencyKey {IdempotencyKey} CustomerId {CustomerId}",
+                idempotencyKey,
+                request.CustomerId);
             throw;
         }
     }

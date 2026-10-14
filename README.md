@@ -84,7 +84,7 @@ Beyond A/B/C, these races are identified and closed in code:
 
 Live tests for (1)–(2) are not in the suite; they follow from `xmin` + the cancel status gate, which are covered by unit tests and Scenario B.
 
-## Correlation ID
+## Correlation ID and structured logging
 
 Every response includes `X-Correlation-Id`.
 
@@ -92,6 +92,18 @@ Every response includes `X-Correlation-Id`.
 - If omitted, the API generates a GUID.
 - The middleware runs first and sets the header in `OnStarting` so it survives exception handling.
 - The ID is pushed into the logger scope (`CorrelationId`) for structured logs. Do not use `Console.WriteLine` for tracing.
+
+Business operations also emit structured logs (via `ILogger`, message templates) so ops can trace outcomes alongside the correlation ID:
+
+| Area | Examples |
+|---|---|
+| Create order | created / validation failure / idempotency replay / hash mismatch / in-flight / insufficient stock |
+| Stock | deduct success/failure, restore on cancel |
+| Status update | transition success, illegal transition, concurrency conflict |
+| Cancel | success with item count, already cancelled, illegal state, concurrency conflict |
+| Idempotency store | begin created, existing-key outcome, complete, abandon |
+
+Log properties include `OrderId`, `CustomerId`, `IdempotencyKey`, `ProductId`, `FromStatus`, `ToStatus`, etc., so they can be queried in a log aggregator.
 
 ## Local setup
 

@@ -6,7 +6,7 @@ using OrderManagement.API.Domain;
 
 namespace OrderManagement.API.Services;
 
-public sealed class IdempotencyService(AppDbContext db) : IIdempotencyService
+public sealed class IdempotencyService(AppDbContext db, ILogger<IdempotencyService> logger) : IIdempotencyService
 {
     public async Task<IdempotencyBeginResult> BeginAsync(string key, string requestHash, CancellationToken ct)
     {
@@ -24,6 +24,7 @@ public sealed class IdempotencyService(AppDbContext db) : IIdempotencyService
         try
         {
             await db.SaveChangesAsync(ct);
+            logger.LogInformation("Idempotency begin created for IdempotencyKey {IdempotencyKey}", key);
             return IdempotencyBeginResult.Created();
         }
         catch (DbUpdateException ex) when (PostgresUniqueViolation.IsUniqueViolation(ex))
@@ -39,11 +40,18 @@ public sealed class IdempotencyService(AppDbContext db) : IIdempotencyService
                 throw;
             }
 
-            return IdempotencyDecision.ForExistingRecord(
+            var decision = IdempotencyDecision.ForExistingRecord(
                 requestHash,
                 existing.RequestHash,
                 existing.ResponseStatus,
                 existing.ResponseBody);
+
+            logger.LogInformation(
+                "Idempotency begin resolved existing key IdempotencyKey {IdempotencyKey} Outcome {Outcome} ConflictReason {ConflictReason}",
+                key,
+                decision.Outcome,
+                decision.ConflictReason);
+            return decision;
         }
     }
 
@@ -55,6 +63,10 @@ public sealed class IdempotencyService(AppDbContext db) : IIdempotencyService
         record.ResponseStatus = responseStatus;
         record.ResponseBody = responseBody;
         await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Idempotency completed for IdempotencyKey {IdempotencyKey} ResponseStatus {ResponseStatus}",
+            key,
+            responseStatus);
     }
 
     public async Task AbandonAsync(string key, CancellationToken ct)
@@ -64,10 +76,14 @@ public sealed class IdempotencyService(AppDbContext db) : IIdempotencyService
 
         if (record is null)
         {
+            logger.LogDebug(
+                "Idempotency abandon skipped; no pending record for IdempotencyKey {IdempotencyKey}",
+                key);
             return;
         }
 
         db.IdempotencyRecords.Remove(record);
         await db.SaveChangesAsync(ct);
+        logger.LogInformation("Idempotency abandoned pending key IdempotencyKey {IdempotencyKey}", key);
     }
 }

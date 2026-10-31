@@ -32,7 +32,7 @@ public sealed class IdempotencyServiceTests
         await db.SaveChangesAsync();
 
         var sut = new IdempotencyService(db, NullLogger<IdempotencyService>.Instance);
-        await sut.AbandonAsync("pending-key", CancellationToken.None);
+        await sut.AbandonAsync(Guid.Empty, "pending-key", CancellationToken.None);
 
         Assert.Null(await db.IdempotencyRecords.AsNoTracking().FirstOrDefaultAsync(r => r.Key == "pending-key"));
         Assert.NotNull(await db.IdempotencyRecords.AsNoTracking().FirstOrDefaultAsync(r => r.Key == "completed-key"));
@@ -53,8 +53,8 @@ public sealed class IdempotencyServiceTests
         await db.SaveChangesAsync();
 
         var sut = new IdempotencyService(db, NullLogger<IdempotencyService>.Instance);
-        await sut.AbandonAsync("completed-key", CancellationToken.None);
-        await sut.AbandonAsync("missing-key", CancellationToken.None);
+        await sut.AbandonAsync(Guid.Empty, "completed-key", CancellationToken.None);
+        await sut.AbandonAsync(Guid.Empty, "missing-key", CancellationToken.None);
 
         Assert.NotNull(await db.IdempotencyRecords.AsNoTracking().FirstOrDefaultAsync(r => r.Key == "completed-key"));
     }

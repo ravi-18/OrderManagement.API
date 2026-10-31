@@ -24,19 +24,22 @@ EF Core InMemory is used only for unit tests. It does not reproduce unique viola
 
 `POST /api/orders` **requires** the `Idempotency-Key` header (1–256 characters).
 
-**Why a unique constraint, not a cache:** retries and double-submits must be safe across process restarts and multiple app instances. A Redis/memory cache can expire or disagree between nodes. A uniqueness constraint on `IdempotencyRecords.Key` is the source of truth.
+**Why a unique constraint, not a cache:** retries and double-submits must be safe across process restarts and multiple app instances. A Redis/memory cache can expire or disagree between nodes. A uniqueness constraint on `IdempotencyRecords` (`CustomerId`, `Key`) is the source of truth.
+
+**Keys are scoped per customer**, so one customer cannot block another by claiming a key first. `CustomerId` comes from the request body and auth is out of scope, so this is not caller identity: anyone who knows a customer's id can still use that customer's key space.
 
 Flow:
 
 1. Hash the request body (`CustomerId`, `ShippingAddress`, items).
-2. `INSERT` a pending idempotency row (`ResponseStatus = 0`).
+2. Begin a transaction and `INSERT` a pending idempotency row (`ResponseStatus = 0`) inside it.
 3. On success, continue: deduct stock, insert the order, store the 201 body, commit.
-4. On unique violation (`23505`), load the existing row:
+4. A concurrent request with the same key waits on the unique key until the first one finishes. If that one committed, the insert fails with `23505` and the existing row is loaded:
    - **Same hash + completed 201** → replay the stored body (no second stock deduct).
-   - **Same hash + still in flight** → **409** `conflict` (retryable; caller may retry until replay).
    - **Different hash** → **422** `business_rule` (key reused with a different body).
 
-Failed creates **abandon** the pending row so the same key can be retried.
+If the first request rolled back, the waiting request's insert succeeds and it creates the order itself.
+
+The key commits with the order or not at all, so a failed create or a process crash leaves nothing behind and the same key can be retried.
 
 ## Concurrency (FRD scenarios A, B, C)
 
@@ -66,8 +69,8 @@ Covered by `ConcurrentOrderTests.ScenarioB_ConcurrentStatus_OneWinnerAndConflict
 
 Two parallel POSTs with the **same** `Idempotency-Key` and the same body.
 
-- Unique `Key` ⇒ exactly one order row.
-- The other request either waits until it can **replay** the same 201, or gets in-flight **409** and retries to replay.
+- Unique (`CustomerId`, `Key`) ⇒ exactly one order row.
+- The other request waits, then **replays** the same 201.
 - Stock is deducted once.
 
 Covered by `ConcurrentOrderTests.ScenarioC_IdempotentCreateRace_ExactlyOneOrder`.
@@ -80,15 +83,16 @@ Beyond A/B/C, these races are identified and closed in code:
 2. **Double cancel** — First cancel restores stock and sets `Cancelled`. Second cancel sees `Cancelled` and returns **409** without restoring again (no double credit).
 3. **Cancel after Shipped/Delivered** — Status gate: only Pending/Confirmed can cancel. Shipped/Delivered → **422**; stock is not restored after the order has left the warehouse path.
 4. **Same `Idempotency-Key`, different body** — Stored `RequestHash` mismatch → **422**. Prevents attaching a new payload to a key that already created (or is creating) a different order.
-5. **Create failure after pending idempotency insert** — Transaction rollback + `AbandonAsync` deletes the in-flight row so a retry with the same key is not stuck in 409 forever.
+5. **Create failure or crash after pending idempotency insert** — The insert is part of the order transaction, so rollback (or the database, after a crash) discards it and a retry with the same key starts clean.
+6. **Multi-item creates in opposite order** — Create and cancel both touch products sorted by `ProductId`, so concurrent multi-item writes take row locks in one order and cannot deadlock.
 
-Live tests for (1)–(2) are not in the suite; they follow from `xmin` + the cancel status gate, which are covered by unit tests and Scenario B.
+`Cancel_LosingTheRace_RollsBackRestoredStock` covers the rollback in (1) on PostgreSQL. A live test for (2) is not in the suite; it follows from the cancel status gate, which is covered by unit tests.
 
 ## Correlation ID and structured logging
 
 Every response includes `X-Correlation-Id`.
 
-- Send your own value to correlate a client retry chain; it is echoed.
+- Send your own value to correlate a client retry chain; it is echoed if it is at most 64 characters from `A-Za-z0-9._:-`, otherwise it is replaced with a generated GUID.
 - If omitted, the API generates a GUID.
 - The middleware runs first and sets the header in `OnStarting` so it survives exception handling.
 - The ID is pushed into the logger scope (`CorrelationId`) for structured logs. Do not use `Console.WriteLine` for tracing.
@@ -213,7 +217,7 @@ If PostgreSQL is unreachable, `[PostgresFact]` **skips** with a clear message (u
 
 ## Example requests
 
-Base URL below is the HTTP launch profile.
+Base URL below is the HTTP launch profile. For a runnable walkthrough (create, get, list, confirm, cancel, plus error cases) open `src/OrderManagement.API/OrderManagement.API.http` in VS Code (REST Client), Rider or Visual Studio, or use Swagger UI at `/swagger`, where the request bodies are prefilled with seeded ids.
 
 ### Create order
 
@@ -272,7 +276,26 @@ Pending or Confirmed → **200**, stock restored. Already cancelled → **409**.
 
 ### Error shape
 
-ProblemDetails with an extra `code` (`validation`, `not_found`, `conflict`, `business_rule`, `internal_error`). Unhandled exceptions return **500** without stack traces or secrets.
+Every error is `application/problem+json` with `type`, `title`, `status`, `detail`, and an extra `code` (`validation`, `not_found`, `conflict`, `business_rule`, `payload_too_large`, `bad_request`, `rate_limited`, `internal_error`). Unhandled exceptions return **500** without stack traces or secrets.
+
+Limits: an order may have at most 40 items, each with quantity up to 1000 (**400**), and a request body may be at most 64 KB on Kestrel (**413**).
+
+Rate limit: `/api/*` allows 120 requests per minute per client IP (`RateLimiting:PermitLimit` and `RateLimiting:WindowSeconds`), then returns **429** with `Retry-After`. Counters are per app instance. Behind a reverse proxy all clients share one address until forwarded headers are configured.
+
+`validation` (**400**) errors, including malformed JSON, wrong types, unknown enum names and bad query values, also carry `errors`: a map of field name to messages, reported all at once.
+
+```json
+{
+  "type": "https://httpstatuses.io/400",
+  "title": "Bad Request",
+  "status": 400,
+  "detail": "Request validation failed: ...",
+  "code": "validation",
+  "errors": { "customerId": ["CustomerId is required."], "items[0].quantity": ["Item quantity must be greater than zero."] }
+}
+```
+
+Branch on `code` (or `status`), not on `detail` wording. Malformed GUIDs in the path (`/api/orders/not-a-guid`) return **404**.
 
 ## Project layout
 

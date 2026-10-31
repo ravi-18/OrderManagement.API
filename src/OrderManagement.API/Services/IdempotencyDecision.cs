@@ -4,7 +4,8 @@ namespace OrderManagement.API.Services;
 
 /// <summary>
 /// Pure begin-path decision for an existing idempotency row.
-/// In-flight (matching hash, no stored response yet) is a retryable conflict;
+/// In-flight (matching hash, no stored response yet) is a retryable conflict, kept as a safeguard:
+/// pending rows now commit only with their response, so a reader should never see one;
 /// hash mismatch is a non-retryable conflict (HTTP 422 at the Create Order boundary).
 /// Concurrent unique-key races are covered against PostgreSQL in Task 17.
 /// </summary>

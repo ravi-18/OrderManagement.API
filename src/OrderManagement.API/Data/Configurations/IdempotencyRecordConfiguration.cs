@@ -9,7 +9,7 @@ public sealed class IdempotencyRecordConfiguration : IEntityTypeConfiguration<Id
     public void Configure(EntityTypeBuilder<IdempotencyRecord> builder)
     {
         builder.ToTable("IdempotencyRecords");
-        builder.HasKey(r => r.Key);
+        builder.HasKey(r => new { r.CustomerId, r.Key });
 
         builder.Property(r => r.Key)
             .HasMaxLength(256);

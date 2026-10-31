@@ -15,6 +15,13 @@
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.0.1" />
+    <!-- Security pins: clear transitive advisories. Remove once the parent packages ship fixed dependencies. -->
+    <!-- GHSA-v5pm-xwqc-g5wc: pulled in by Swashbuckle and Microsoft.AspNetCore.OpenApi (runtime). -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
+    <!-- GHSA-846f-f764-76mx / GHSA-2fmv-rv2c-59x7: pulled in only by EF Core Design (design-time), never shipped. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.14">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
   </ItemGroup>
 
 </Project>

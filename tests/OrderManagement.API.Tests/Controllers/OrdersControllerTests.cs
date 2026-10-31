@@ -29,7 +29,8 @@ public sealed class OrdersControllerTests : IAsyncLifetime
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders();
         builder.Services.AddControllers()
-            .AddApplicationPart(typeof(OrdersController).Assembly);
+            .AddApplicationPart(typeof(OrdersController).Assembly)
+            .AddUniformValidationProblems();
         builder.Services.AddSingleton<IOrderService>(_orders);
         builder.Services.AddExceptionHandler<DomainExceptionHandler>();
         builder.Services.AddProblemDetails();
@@ -239,6 +240,69 @@ public sealed class OrdersControllerTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal("validation", json.GetProperty("code").GetString());
         Assert.Equal(0, _orders.LastListQuery!.Page);
+    }
+
+    [Theory]
+    [InlineData("{bad", "")]
+    [InlineData("""{"customerId":"nope"}""", "customerId")]
+    [InlineData("""{"items":[{"quantity":"x"}]}""", "items[0].quantity")]
+    public async Task Post_MalformedBody_Returns400UniformProblem(string body, string field)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/orders");
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", "key-1");
+        request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+
+        var response = await _client.SendAsync(request);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var raw = json.GetRawText();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("validation", json.GetProperty("code").GetString());
+        Assert.Equal("https://httpstatuses.io/400", json.GetProperty("type").GetString());
+        Assert.Equal("Bad Request", json.GetProperty("title").GetString());
+        Assert.DoesNotContain("System.", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("LineNumber", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain("request field is required", raw, StringComparison.Ordinal);
+        Assert.True(json.GetProperty("errors").TryGetProperty(field, out _), raw);
+        Assert.Null(_orders.LastKey);
+    }
+
+    [Fact]
+    public async Task PatchStatus_UnknownStatus_ListsAllowedValues()
+    {
+        var response = await SendPatchStatusAsync(Guid.NewGuid(), """{"status":"Bogus"}""");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("validation", json.GetProperty("code").GetString());
+        Assert.Contains("Pending, Confirmed, Shipped, Delivered, Cancelled", json.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Pending, Confirmed, Shipped, Delivered, Cancelled", json.GetProperty("detail").GetString(), StringComparison.Ordinal);
+        Assert.Null(_orders.LastUpdateRequest);
+    }
+
+    [Fact]
+    public async Task PatchStatus_MissingStatus_Returns400InsteadOfDefaultingToPending()
+    {
+        var response = await SendPatchStatusAsync(Guid.NewGuid(), "{}");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("validation", json.GetProperty("code").GetString());
+        Assert.Equal("status is required.", json.GetProperty("errors").GetProperty("status")[0].GetString());
+        Assert.DoesNotContain("not valid JSON", json.GetProperty("detail").GetString());
+        Assert.Null(_orders.LastUpdateRequest);
+    }
+
+    [Fact]
+    public async Task List_NonNumericPage_Returns400UniformProblem()
+    {
+        var response = await _client.GetAsync("/api/orders?page=abc");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("validation", json.GetProperty("code").GetString());
+        Assert.True(json.GetProperty("errors").TryGetProperty("page", out _));
     }
 
     [Fact]

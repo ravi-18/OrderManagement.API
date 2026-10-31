@@ -322,6 +322,20 @@ public sealed class OrderServiceTests
     }
 
     [Fact]
+    public async Task ListAsync_PageOffsetOverflowingInt_IsValidation()
+    {
+        await using var db = CreateDb();
+        var sut = CreateSut(db);
+
+        var result = await sut.ListAsync(
+            new ListOrdersQuery { Page = int.MaxValue, PageSize = 100 },
+            CancellationToken.None);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("validation", result.Error!.Code);
+    }
+
+    [Fact]
     public async Task UpdateStatusAsync_Missing_IsNotFound()
     {
         await using var db = CreateDb();
@@ -708,13 +722,13 @@ public sealed class OrderServiceTests
         public string LastAbandonedKey { get; private set; } = string.Empty;
         public CancellationToken LastAbandonToken { get; private set; }
 
-        public Task<IdempotencyBeginResult> BeginAsync(string key, string requestHash, CancellationToken ct)
+        public Task<IdempotencyBeginResult> BeginAsync(Guid customerId, string key, string requestHash, CancellationToken ct)
         {
             BeginCalls++;
             return Task.FromResult(BeginResult);
         }
 
-        public Task CompleteAsync(string key, int responseStatus, string responseBody, CancellationToken ct)
+        public Task CompleteAsync(Guid customerId, string key, int responseStatus, string responseBody, CancellationToken ct)
         {
             CompleteCalls++;
             LastCompletedStatus = responseStatus;
@@ -722,7 +736,7 @@ public sealed class OrderServiceTests
             return Task.CompletedTask;
         }
 
-        public Task AbandonAsync(string key, CancellationToken ct)
+        public Task AbandonAsync(Guid customerId, string key, CancellationToken ct)
         {
             AbandonCalls++;
             LastAbandonedKey = key;

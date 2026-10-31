@@ -8,10 +8,11 @@ namespace OrderManagement.API.Services;
 
 public sealed class IdempotencyService(AppDbContext db, ILogger<IdempotencyService> logger) : IIdempotencyService
 {
-    public async Task<IdempotencyBeginResult> BeginAsync(string key, string requestHash, CancellationToken ct)
+    public async Task<IdempotencyBeginResult> BeginAsync(Guid customerId, string key, string requestHash, CancellationToken ct)
     {
         var pending = new IdempotencyRecord
         {
+            CustomerId = customerId,
             Key = key,
             RequestHash = requestHash,
             ResponseStatus = 0,
@@ -33,7 +34,7 @@ public sealed class IdempotencyService(AppDbContext db, ILogger<IdempotencyServi
 
             var existing = await db.IdempotencyRecords
                 .AsNoTracking()
-                .FirstOrDefaultAsync(r => r.Key == key, ct);
+                .FirstOrDefaultAsync(r => r.CustomerId == customerId && r.Key == key, ct);
 
             if (existing is null)
             {
@@ -55,9 +56,9 @@ public sealed class IdempotencyService(AppDbContext db, ILogger<IdempotencyServi
         }
     }
 
-    public async Task CompleteAsync(string key, int responseStatus, string responseBody, CancellationToken ct)
+    public async Task CompleteAsync(Guid customerId, string key, int responseStatus, string responseBody, CancellationToken ct)
     {
-        var record = await db.IdempotencyRecords.FirstOrDefaultAsync(r => r.Key == key, ct)
+        var record = await db.IdempotencyRecords.FirstOrDefaultAsync(r => r.CustomerId == customerId && r.Key == key, ct)
             ?? throw new NotFoundException($"Idempotency record '{key}' was not found.");
 
         record.ResponseStatus = responseStatus;
@@ -69,10 +70,10 @@ public sealed class IdempotencyService(AppDbContext db, ILogger<IdempotencyServi
             responseStatus);
     }
 
-    public async Task AbandonAsync(string key, CancellationToken ct)
+    public async Task AbandonAsync(Guid customerId, string key, CancellationToken ct)
     {
         var record = await db.IdempotencyRecords
-            .FirstOrDefaultAsync(r => r.Key == key && r.ResponseStatus == 0, ct);
+            .FirstOrDefaultAsync(r => r.CustomerId == customerId && r.Key == key && r.ResponseStatus == 0, ct);
 
         if (record is null)
         {

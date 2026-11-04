@@ -7,38 +7,66 @@ public sealed class CreateOrderRequestValidator
 {
     public const int ShippingAddressMaxLength = 500;
 
+    // Bounds the per-request stock UPDATEs and keeps the serialized 201 body within the
+    // 8000-character IdempotencyRecords.ResponseBody column.
+    public const int MaxItems = 40;
+
+    public const int MaxQuantity = 1000;
+
     public Result Validate(CreateOrderRequest request)
     {
+        // Collect every problem so a client fixes the whole request in one round trip.
+        var errors = new Dictionary<string, string[]>();
+
         if (request.CustomerId == Guid.Empty)
         {
-            return Result.Failure(Error.Validation("CustomerId is required."));
+            errors["customerId"] = ["CustomerId is required."];
         }
 
         if (string.IsNullOrWhiteSpace(request.ShippingAddress))
         {
-            return Result.Failure(Error.Validation("ShippingAddress is required."));
+            errors["shippingAddress"] = ["ShippingAddress is required."];
         }
-
-        if (request.ShippingAddress.Trim().Length > ShippingAddressMaxLength)
+        else if (request.ShippingAddress.Trim().Length > ShippingAddressMaxLength)
         {
-            return Result.Failure(Error.Validation("ShippingAddress must be 500 characters or fewer."));
+            errors["shippingAddress"] = ["ShippingAddress must be 500 characters or fewer."];
         }
 
         if (request.Items is null || request.Items.Count == 0)
         {
-            return Result.Failure(Error.Validation("Order must contain at least one item."));
+            errors["items"] = ["Order must contain at least one item."];
         }
-
-        if (request.Items.Any(item => item.ProductId == Guid.Empty))
+        else if (request.Items.Count > MaxItems)
         {
-            return Result.Failure(Error.Validation("ProductId is required."));
+            // Checked before the per-item loop so an oversized order can't grow the error map.
+            errors["items"] = [$"Order must contain {MaxItems} items or fewer."];
         }
-
-        if (request.Items.Any(item => item.Quantity <= 0))
+        else
         {
-            return Result.Failure(Error.Validation("Item quantity must be greater than zero."));
+            for (var i = 0; i < request.Items.Count; i++)
+            {
+                if (request.Items[i] is null)
+                {
+                    errors[$"items[{i}]"] = ["Item is required."];
+                    continue;
+                }
+
+                if (request.Items[i].ProductId == Guid.Empty)
+                {
+                    errors[$"items[{i}].productId"] = ["ProductId is required."];
+                }
+
+                if (request.Items[i].Quantity <= 0)
+                {
+                    errors[$"items[{i}].quantity"] = ["Item quantity must be greater than zero."];
+                }
+                else if (request.Items[i].Quantity > MaxQuantity)
+                {
+                    errors[$"items[{i}].quantity"] = [$"Item quantity must be {MaxQuantity} or fewer."];
+                }
+            }
         }
 
-        return Result.Success();
+        return errors.Count == 0 ? Result.Success() : Result.Failure(Error.Validation(errors));
     }
 }

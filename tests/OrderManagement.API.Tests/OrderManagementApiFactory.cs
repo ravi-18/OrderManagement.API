@@ -8,5 +8,6 @@ public sealed class OrderManagementApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        builder.UseSetting("RateLimiting:PermitLimit", "100000");
     }
 }

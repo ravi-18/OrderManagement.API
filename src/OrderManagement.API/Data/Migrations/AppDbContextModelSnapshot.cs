@@ -24,6 +24,9 @@ namespace OrderManagement.API.Data.Migrations
 
             modelBuilder.Entity("OrderManagement.API.Domain.IdempotencyRecord", b =>
                 {
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Key")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
@@ -44,7 +47,7 @@ namespace OrderManagement.API.Data.Migrations
                     b.Property<int>("ResponseStatus")
                         .HasColumnType("integer");
 
-                    b.HasKey("Key");
+                    b.HasKey("CustomerId", "Key");
 
                     b.ToTable("IdempotencyRecords", (string)null);
                 });

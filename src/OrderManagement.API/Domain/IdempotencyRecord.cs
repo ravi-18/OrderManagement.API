@@ -2,6 +2,7 @@ namespace OrderManagement.API.Domain;
 
 public class IdempotencyRecord
 {
+    public Guid CustomerId { get; set; }
     public required string Key { get; set; }
     public required string RequestHash { get; set; }
     public int ResponseStatus { get; set; }

@@ -34,7 +34,11 @@ public sealed class OrderService(
         }
 
         var requestHash = RequestHash.Compute(request);
-        var begin = await idempotency.BeginAsync(idempotencyKey, requestHash, ct);
+
+        // The pending row shares the order's transaction: a crash rolls both back, so no key can be
+        // stranded, and a concurrent duplicate waits on the unique key until this request finishes.
+        await using var tx = await BeginTransactionAsync(ct);
+        var begin = await idempotency.BeginAsync(request.CustomerId, idempotencyKey, requestHash, ct);
 
         switch (begin.Outcome)
         {
@@ -43,7 +47,7 @@ public sealed class OrderService(
                     "Create order replaying idempotent response for IdempotencyKey {IdempotencyKey} with status {ResponseStatus}",
                     idempotencyKey,
                     begin.ResponseStatus);
-                return DeserializeReplay(begin.ResponseStatus, begin.ResponseBody);
+                return IdempotencyReplay.ToResult(begin.ResponseStatus, begin.ResponseBody);
 
             case IdempotencyBeginOutcome.Conflict when begin.ConflictReason == IdempotencyConflictReason.HashMismatch:
                 logger.LogWarning(
@@ -62,7 +66,7 @@ public sealed class OrderService(
 
         try
         {
-            var created = await CreateNewOrderAsync(idempotencyKey, request, ct);
+            var created = await CreateNewOrderAsync(idempotencyKey, request, tx, ct);
             if (created.IsFailure)
             {
                 logger.LogWarning(
@@ -71,7 +75,7 @@ public sealed class OrderService(
                     request.CustomerId,
                     created.Error!.Code,
                     created.Error.Message);
-                await AbandonAfterFailureAsync(idempotencyKey);
+                await AbandonAfterFailureAsync(request.CustomerId, idempotencyKey);
             }
 
             return created;
@@ -83,7 +87,7 @@ public sealed class OrderService(
                 "Create order threw for IdempotencyKey {IdempotencyKey} CustomerId {CustomerId}",
                 idempotencyKey,
                 request.CustomerId);
-            await AbandonAfterFailureAsync(idempotencyKey);
+            await AbandonAfterFailureAsync(request.CustomerId, idempotencyKey);
             throw;
         }
     }
@@ -97,7 +101,7 @@ public sealed class OrderService(
 
         return order is null
             ? Result.Failure<OrderResponse>(Error.NotFound($"Order '{id}' was not found."))
-            : Result.Success(ToResponse(order));
+            : Result.Success(OrderMapper.ToResponse(order));
     }
 
     public async Task<Result<PagedResponse<OrderResponse>>> ListAsync(ListOrdersQuery query, CancellationToken ct)
@@ -115,6 +119,11 @@ public sealed class OrderService(
         if (query.PageSize > 100)
         {
             return Result.Failure<PagedResponse<OrderResponse>>(Error.Validation("pageSize must be 100 or fewer."));
+        }
+
+        if ((long)(query.Page - 1) * query.PageSize > int.MaxValue)
+        {
+            return Result.Failure<PagedResponse<OrderResponse>>(Error.Validation("page is too large."));
         }
 
         var filtered = db.Orders.AsNoTracking();
@@ -149,7 +158,7 @@ public sealed class OrderService(
 
         return Result.Success(new PagedResponse<OrderResponse>
         {
-            Items = orders.Select(ToResponse).ToList(),
+            Items = orders.Select(OrderMapper.ToResponse).ToList(),
             Page = query.Page,
             PageSize = query.PageSize,
             TotalCount = totalCount
@@ -218,7 +227,7 @@ public sealed class OrderService(
             id,
             fromStatus,
             request.Status);
-        return Result.Success(ToResponse(order));
+        return Result.Success(OrderMapper.ToResponse(order));
     }
 
     public async Task<Result<OrderResponse>> CancelAsync(Guid id, CancellationToken ct)
@@ -250,9 +259,7 @@ public sealed class OrderService(
         }
 
         var fromStatus = order.Status;
-        await using var tx = db.Database.IsRelational()
-            ? await db.Database.BeginTransactionAsync(ct)
-            : null;
+        await using var tx = await BeginTransactionAsync(ct);
 
         try
         {
@@ -275,7 +282,7 @@ public sealed class OrderService(
                 id,
                 fromStatus,
                 order.Items.Count);
-            return Result.Success(ToResponse(order));
+            return Result.Success(OrderMapper.ToResponse(order));
         }
         catch (DbUpdateConcurrencyException)
         {
@@ -295,31 +302,30 @@ public sealed class OrderService(
     private async Task<Result<OrderResponse>> CreateNewOrderAsync(
         string idempotencyKey,
         CreateOrderRequest request,
+        IDbContextTransaction? tx,
         CancellationToken ct)
     {
-        var productIds = request.Items.Select(i => i.ProductId).Distinct().ToList();
-        var products = await db.Products
-            .AsNoTracking()
-            .Where(p => productIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, ct);
-
-        var missing = productIds.FirstOrDefault(id => !products.ContainsKey(id));
-        if (missing != Guid.Empty)
-        {
-            logger.LogWarning(
-                "Create order missing product {ProductId} for IdempotencyKey {IdempotencyKey}",
-                missing,
-                idempotencyKey);
-            return Result.Failure<OrderResponse>(Error.NotFound($"Product '{missing}' was not found."));
-        }
-
-        await using var tx = db.Database.IsRelational()
-            ? await db.Database.BeginTransactionAsync(ct)
-            : null;
-
         try
         {
-            foreach (var item in request.Items)
+            var productIds = request.Items.Select(i => i.ProductId).Distinct().ToList();
+            var products = await db.Products
+                .AsNoTracking()
+                .Where(p => productIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, ct);
+
+            var missing = productIds.FirstOrDefault(id => !products.ContainsKey(id));
+            if (missing != Guid.Empty)
+            {
+                await RollbackAndDetachAsync(tx);
+                logger.LogWarning(
+                    "Create order missing product {ProductId} for IdempotencyKey {IdempotencyKey}",
+                    missing,
+                    idempotencyKey);
+                return Result.Failure<OrderResponse>(Error.NotFound($"Product '{missing}' was not found."));
+            }
+
+            // Same lock order as CancelAsync, so concurrent multi-item writes cannot deadlock.
+            foreach (var item in request.Items.OrderBy(i => i.ProductId))
             {
                 var deducted = await stock.TryDeductAsync(item.ProductId, item.Quantity, ct);
                 if (!deducted)
@@ -356,9 +362,9 @@ public sealed class OrderService(
             db.Orders.Add(order);
             await db.SaveChangesAsync(ct);
 
-            var response = ToResponse(order);
+            var response = OrderMapper.ToResponse(order);
             var body = System.Text.Json.JsonSerializer.Serialize(response, OrderJson.SerializerOptions);
-            await idempotency.CompleteAsync(idempotencyKey, StatusCodes.Status201Created, body, ct);
+            await idempotency.CompleteAsync(request.CustomerId, idempotencyKey, StatusCodes.Status201Created, body, ct);
 
             if (tx is not null)
             {
@@ -385,11 +391,18 @@ public sealed class OrderService(
         }
     }
 
-    private async Task AbandonAfterFailureAsync(string key)
+    // On Postgres the rollback already removed the row; this cleans up where there is no transaction.
+    private async Task AbandonAfterFailureAsync(Guid customerId, string key)
     {
         db.ChangeTracker.Clear();
-        await idempotency.AbandonAsync(key, CancellationToken.None);
+        await idempotency.AbandonAsync(customerId, key, CancellationToken.None);
     }
+
+    // InMemory (unit tests) has no transactions; Postgres always gets one.
+    private async Task<IDbContextTransaction?> BeginTransactionAsync(CancellationToken ct) =>
+        db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
 
     private async Task RollbackAndDetachAsync(IDbContextTransaction? tx)
     {
@@ -405,52 +418,4 @@ public sealed class OrderService(
             db.ChangeTracker.Clear();
         }
     }
-
-    private static Result<OrderResponse> DeserializeReplay(int? responseStatus, string? responseBody)
-    {
-        if (responseStatus is not StatusCodes.Status201Created)
-        {
-            return Result.Failure<OrderResponse>(MapStoredReplayStatus(responseStatus));
-        }
-
-        if (string.IsNullOrWhiteSpace(responseBody))
-        {
-            return Result.Failure<OrderResponse>(
-                Error.Conflict("A request with this Idempotency-Key is already in progress."));
-        }
-
-        var cached = System.Text.Json.JsonSerializer.Deserialize<OrderResponse>(responseBody, OrderJson.SerializerOptions);
-        return cached is null
-            ? Result.Failure<OrderResponse>(Error.Conflict("Stored idempotent response could not be replayed."))
-            : Result.Success(cached);
-    }
-
-    private static Error MapStoredReplayStatus(int? status) => status switch
-    {
-        StatusCodes.Status400BadRequest =>
-            Error.Validation("Stored idempotent response indicates a validation failure."),
-        StatusCodes.Status404NotFound =>
-            Error.NotFound("Stored idempotent response indicates the resource was not found."),
-        StatusCodes.Status409Conflict =>
-            Error.Conflict("Stored idempotent response indicates a conflict."),
-        StatusCodes.Status422UnprocessableEntity =>
-            Error.BusinessRule("Stored idempotent response indicates a business rule violation."),
-        _ => Error.Conflict("Stored idempotent response could not be replayed with the original status.")
-    };
-
-    private static OrderResponse ToResponse(Order order) => new()
-    {
-        Id = order.Id,
-        CustomerId = order.CustomerId,
-        ShippingAddress = order.ShippingAddress,
-        Status = order.Status.ToString(),
-        CreatedAt = order.CreatedAt,
-        UpdatedAt = order.UpdatedAt,
-        Items = order.Items.Select(item => new OrderItemResponse
-        {
-            ProductId = item.ProductId,
-            Quantity = item.Quantity,
-            UnitPrice = item.UnitPrice
-        }).ToList()
-    };
 }

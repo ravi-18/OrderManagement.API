@@ -1,18 +1,76 @@
+# Run the API first (see README "Local setup"), then send these top to bottom.
+# Requests share variables, so each step uses the order created in step 1.
+# Seeded ids: customer bbbbbbbb-0001-4000-8000-000000000001,
+#             products aaaaaaaa-0001-4000-8000-00000000000{1,2,3} (stock 15 / 50 / 5).
+
 @OrderManagement.API_HostAddress = http://localhost:5196
 
+### 0. Liveness
+GET {{OrderManagement.API_HostAddress}}/health
+
+### 1. Create an order -> 201 + Location. Idempotency-Key is REQUIRED (1-256 chars).
+# @name createOrder
 POST {{OrderManagement.API_HostAddress}}/api/orders
 Content-Type: application/json
 Idempotency-Key: demo-create-1
+X-Correlation-Id: demo-trace-1
 
 {
   "customerId": "bbbbbbbb-0001-4000-8000-000000000001",
   "shippingAddress": "Jl. Sudirman 1",
   "items": [
-    {
-      "productId": "aaaaaaaa-0001-4000-8000-000000000001",
-      "quantity": 2
-    }
+    { "productId": "aaaaaaaa-0001-4000-8000-000000000002", "quantity": 2 }
   ]
 }
 
-###
+### 1b. Same key + same body again -> the same 201 (replay, stock deducted once).
+###     Change the body but keep the key -> 422 business_rule.
+
+@orderId = {{createOrder.response.body.$.id}}
+
+### 2. Get the order -> 200 (unknown id -> 404 not_found)
+GET {{OrderManagement.API_HostAddress}}/api/orders/{{orderId}}
+
+### 3. List orders -> { items, page, pageSize, totalCount }
+###    Filters: status, customerId, from, to (ISO 8601). page>=1, pageSize 1-100.
+GET {{OrderManagement.API_HostAddress}}/api/orders?status=Pending&page=1&pageSize=20
+
+### 4. Confirm: Pending -> Confirmed -> Shipped -> Delivered (illegal jump -> 422)
+PATCH {{OrderManagement.API_HostAddress}}/api/orders/{{orderId}}/status
+Content-Type: application/json
+
+{ "status": "Confirmed" }
+
+### 5. Cancel (Pending/Confirmed only; restores stock) -> 200, again -> 409
+POST {{OrderManagement.API_HostAddress}}/api/orders/{{orderId}}/cancel
+
+### Error examples (all return application/problem+json with a `code`)
+
+### E1. Missing Idempotency-Key -> 400 validation
+POST {{OrderManagement.API_HostAddress}}/api/orders
+Content-Type: application/json
+
+{ "customerId": "bbbbbbbb-0001-4000-8000-000000000001", "shippingAddress": "x",
+  "items": [ { "productId": "aaaaaaaa-0001-4000-8000-000000000002", "quantity": 1 } ] }
+
+### E2. Several invalid fields -> 400 validation with per-field `errors`
+POST {{OrderManagement.API_HostAddress}}/api/orders
+Content-Type: application/json
+Idempotency-Key: demo-invalid-1
+
+{ "customerId": "00000000-0000-0000-0000-000000000000", "shippingAddress": "",
+  "items": [ { "productId": "aaaaaaaa-0001-4000-8000-000000000002", "quantity": 0 } ] }
+
+### E3. Insufficient stock (product 3 has 5) -> 409 conflict
+POST {{OrderManagement.API_HostAddress}}/api/orders
+Content-Type: application/json
+Idempotency-Key: demo-stock-1
+
+{ "customerId": "bbbbbbbb-0001-4000-8000-000000000001", "shippingAddress": "Jl. Sudirman 1",
+  "items": [ { "productId": "aaaaaaaa-0001-4000-8000-000000000003", "quantity": 6 } ] }
+
+### E4. Unknown status name -> 400 validation listing the allowed values
+PATCH {{OrderManagement.API_HostAddress}}/api/orders/{{orderId}}/status
+Content-Type: application/json
+
+{ "status": "Bogus" }

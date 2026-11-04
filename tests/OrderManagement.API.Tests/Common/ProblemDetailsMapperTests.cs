@@ -17,6 +17,17 @@ public sealed class ProblemDetailsMapperTests
     }
 
     [Fact]
+    public void FromException_RequestBodyTooLarge_KeepsItsStatusInsteadOf500()
+    {
+        var problem = ProblemDetailsMapper.FromException(
+            new BadHttpRequestException("Request body too large.", StatusCodes.Status413PayloadTooLarge));
+
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, problem.Status);
+        Assert.Equal("Request body too large.", problem.Detail);
+        Assert.Equal("payload_too_large", problem.Extensions["code"]);
+    }
+
+    [Fact]
     public void FromException_Conflict_MapsTo409()
     {
         var problem = ProblemDetailsMapper.FromException(new ConflictException("Insufficient stock"));
